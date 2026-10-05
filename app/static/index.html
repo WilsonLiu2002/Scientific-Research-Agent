@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Inspect literature search, evidence, and grounded scientific answers.">
+  <title>Research Atlas</title>
+  <link rel="stylesheet" href="/static/styles.css?v=hitl-2">
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
+  <script src="/static/app.js?v=hitl-2" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Research Atlas home">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+      <span>Research Atlas</span>
+    </a>
+    <div class="system-status" id="system-status"><span class="status-dot"></span>MCP connected · local inference</div>
+    <button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle color theme">
+      <i data-lucide="sun"></i>
+    </button>
+  </header>
+
+  <main>
+    <section class="query-band" aria-labelledby="query-heading">
+      <div class="query-copy">
+        <p class="eyebrow">Scientific literature workbench</p>
+        <h1 id="query-heading">Ask a research question</h1>
+      </div>
+      <form id="research-form" class="query-form">
+        <label class="sr-only" for="question">Research question</label>
+        <textarea id="question" name="question" rows="2" minlength="8" required>How are graph neural networks used for crystal property prediction?</textarea>
+        <button class="stop-run-button hidden" id="stop-run" type="button" title="Stop the active research run">
+          <i data-lucide="square"></i><span>Stop</span>
+        </button>
+        <button class="run-button" type="submit">
+          <i data-lucide="play"></i><span>Run research</span>
+        </button>
+      </form>
+      <div class="example-row" aria-label="Example questions">
+        <button class="demo-button" id="experiment-demo" type="button"><i data-lucide="flask-conical"></i>Local experiment demo</button>
+        <button type="button" data-question="What methods and datasets are used for crystal property prediction?">Methods & datasets</button>
+        <button type="button" data-question="What are the limitations of machine learning for perovskite stability prediction?">Perovskite limitations</button>
+        <button type="button" data-question="How accurately do machine-learned potentials predict materials properties?">Potential performance</button>
+      </div>
+    </section>
+
+    <section class="workspace" id="workspace" aria-live="polite">
+      <aside class="rail">
+        <div class="rail-heading">
+          <span>Run overview</span><span class="run-id" id="run-id">READY</span>
+        </div>
+        <div class="metric-grid">
+          <div class="metric"><span>Coverage</span><strong id="metric-coverage">—</strong></div>
+          <div class="metric"><span>Papers</span><strong id="metric-papers">—</strong></div>
+          <div class="metric"><span>Evidence</span><strong id="metric-evidence">—</strong></div>
+          <div class="metric"><span>Iterations</span><strong id="metric-iterations">—</strong></div>
+        </div>
+        <div class="progress-block">
+          <div class="label-row"><span>Goal progress</span><span id="goal-percent">0%</span></div>
+          <div class="progress-track"><span id="goal-progress"></span></div>
+          <p id="goal-objective">Submit a question to begin a traceable research run.</p>
+        </div>
+        <div class="pipeline" id="pipeline"></div>
+      </aside>
+
+      <div class="content-area">
+        <nav class="tabs" aria-label="Research result views">
+          <button class="active" type="button" data-tab="report"><i data-lucide="file-text"></i>Report</button>
+          <button type="button" data-tab="evidence"><i data-lucide="network"></i>Evidence</button>
+          <button type="button" data-tab="papers"><i data-lucide="library"></i>Papers</button>
+          <button type="button" data-tab="trace"><i data-lucide="list-tree"></i>Trace</button>
+          <button type="button" data-tab="experiment"><i data-lucide="flask-conical"></i>Experiment</button>
+          <button type="button" data-tab="screening"><i data-lucide="scan-search"></i>Scientific ML</button>
+        </nav>
+
+        <div class="empty-state" id="empty-state">
+          <canvas id="idle-canvas" width="900" height="360" aria-hidden="true"></canvas>
+          <div>
+            <span class="empty-index">01 / READY</span>
+            <h2>Evidence, not just answers.</h2>
+            <p>Every result stays connected to the passages, papers, and research tasks that produced it.</p>
+          </div>
+        </div>
+
+        <section class="panel active" id="panel-report" aria-label="Research report">
+          <div class="panel-header"><div><p class="eyebrow">Grounded synthesis</p><h2>Research report</h2></div><button class="icon-button" id="copy-report" type="button" title="Copy report" aria-label="Copy report"><i data-lucide="copy"></i></button></div>
+          <article class="report" id="report"></article>
+        </section>
+        <section class="panel" id="panel-evidence" aria-label="Evidence map">
+          <div class="panel-header"><div><p class="eyebrow">Citation topology</p><h2>Evidence map</h2></div><span class="legend"><i></i>Full text <i></i>Abstract</span></div>
+          <div class="evidence-layout"><canvas id="evidence-map"></canvas><div class="evidence-list" id="evidence-list"></div></div>
+        </section>
+        <section class="panel" id="panel-papers" aria-label="Retrieved papers">
+          <div class="panel-header"><div><p class="eyebrow">Ranked corpus</p><h2>Retrieved papers</h2></div><span id="paper-count"></span></div>
+          <div class="paper-list" id="paper-list"></div>
+        </section>
+        <section class="panel" id="panel-trace" aria-label="Execution trace">
+          <div class="panel-header"><div><p class="eyebrow">Local observability</p><h2>Execution trace</h2></div><span class="local-badge">Stored locally</span></div>
+          <div class="trace-list" id="trace-list"></div>
+          <section class="telemetry-section" aria-label="Performance telemetry">
+            <div class="telemetry-heading"><div><p class="eyebrow">Redacted telemetry</p><h3>Operations and latency</h3></div><code id="trace-correlation">No trace loaded</code></div>
+            <div class="telemetry-metrics" id="telemetry-metrics"></div>
+            <div class="telemetry-list" id="telemetry-list"></div>
+          </section>
+        </section>
+        <section class="panel" id="panel-experiment" aria-label="Local experiment result">
+          <div class="panel-header"><div><p class="eyebrow">Local computation</p><h2>Experiment result</h2></div><span class="synthetic-badge">Synthetic demo</span></div>
+          <div class="experiment-intro"><div><span id="experiment-id">NOT RUN</span><h3 id="experiment-title">Run the local demo to generate a reproducible benchmark.</h3><p id="experiment-summary"></p></div><dl id="experiment-dataset"></dl></div>
+          <div class="experiment-chart"><canvas id="experiment-canvas"></canvas></div>
+          <div class="experiment-table-wrap"><table class="experiment-table"><thead><tr><th>Model</th><th>MAE</th><th>Std.</th><th>Runtime</th><th>Repeated splits</th></tr></thead><tbody id="experiment-rows"></tbody></table></div>
+          <p class="provenance-note" id="experiment-provenance"></p>
+        </section>
+        <section class="panel" id="panel-screening" aria-label="Scientific machine learning candidate screening">
+          <div class="panel-header"><div><p class="eyebrow">Scientific ML tool</p><h2>Material candidate screening</h2></div><span class="measured-badge">Measured database</span></div>
+          <div class="screening-layout">
+            <form class="screening-form" id="screening-form">
+              <div class="field-group"><label for="gap-min">Band gap range (eV)</label><div class="range-inputs"><input id="gap-min" type="number" min="0" max="20" step="0.1" value="1.0"><span>to</span><input id="gap-max" type="number" min="0" max="20" step="0.1" value="2.5"></div></div>
+              <div class="field-group"><label for="include-elements">Required elements</label><input id="include-elements" type="text" placeholder="e.g. O, Ti"></div>
+              <div class="field-group"><label for="exclude-elements">Excluded elements</label><input id="exclude-elements" type="text" placeholder="e.g. Pb, Cd"></div>
+              <div class="field-group"><label for="candidate-limit">Candidates</label><input id="candidate-limit" type="number" min="1" max="100" value="20"></div>
+              <button class="screen-button" type="submit"><i data-lucide="scan-search"></i>Screen database</button>
+              <p class="tool-note">Ranks measured Matbench records near the center of the requested property window. Screening narrows candidates; it does not validate synthesis or stability.</p>
+            </form>
+            <div class="screening-results">
+              <div class="screening-summary"><div><span id="screen-match-count">—</span><small>matching records</small></div><div><span id="screen-dataset-size">4,604</span><small>database records</small></div><div><span id="screen-model">KNN</span><small>prediction adapter</small></div></div>
+              <div class="candidate-table-wrap"><table class="candidate-table"><thead><tr><th>Rank</th><th>Formula</th><th>Measured gap</th><th>Score</th><th>Provenance</th></tr></thead><tbody id="candidate-rows"><tr><td colspan="5">Set constraints and run the screening tool.</td></tr></tbody></table></div>
+            </div>
+          </div>
+          <details class="rag-context"><summary>Material RAG context</summary><pre id="material-rag-context">No material context generated.</pre></details>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <dialog class="review-dialog" id="review-dialog" aria-labelledby="review-title">
+    <div class="review-heading">
+      <div><p class="eyebrow" id="review-stage">Human checkpoint</p><h2 id="review-title">Review proposed work</h2></div>
+      <span class="review-status"><i></i>Execution paused</span>
+    </div>
+    <p class="review-purpose" id="review-purpose"></p>
+    <div class="review-current" id="review-current"></div>
+    <label class="review-instruction" for="review-instruction">
+      <span>Add guidance</span>
+      <textarea id="review-instruction" rows="3" maxlength="1000" placeholder="Example: prioritize experimental validation after 2020"></textarea>
+    </label>
+    <div class="review-history" id="review-history"></div>
+    <div class="review-actions">
+      <button class="review-button danger" id="review-stop" type="button"><i data-lucide="square"></i>Stop</button>
+      <span class="review-action-spacer"></span>
+      <button class="review-button secondary hidden" id="review-skip" type="button">Skip full text</button>
+      <button class="review-button secondary" id="review-edit" type="button"><i data-lucide="pencil"></i>Apply edits</button>
+      <button class="review-button secondary" id="review-instruct" type="button"><i data-lucide="message-square-plus"></i>Add instruction</button>
+      <button class="review-button primary" id="review-approve" type="button"><i data-lucide="check"></i>Approve</button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status"></div>
+</body>
+</html>

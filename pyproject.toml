@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scientific-literature-agent"
+version = "0.1.0"
+description = "A small AI-for-science literature research agent using LangGraph, MCP, RAG, and skills."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "chromadb>=0.5.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.27.0",
+    "langgraph>=0.2.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    "mcp>=1.2.0",
+    "openai>=1.40.0",
+    "pypdf>=5.0.0",
+    "pydantic>=2.7.0",
+    "uvicorn>=0.30.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+scientific-literature-agent = "app.main:main"
+scientific-literature-eval = "evaluation.run:main"
+scientific-literature-ui = "app.web_cli:main"
+
+[tool.setuptools.packages.find]
+include = ["app*", "evaluation*", "mcp_server*"]
+
+[tool.setuptools.package-data]
+app = ["static/*.html", "static/*.css", "static/*.js"]
+evaluation = ["cases.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

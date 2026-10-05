@@ -1,0 +1,137 @@
+[
+  {
+    "id": "gnn-crystal-overview",
+    "question": "How are graph neural networks used for crystal property prediction?",
+    "expect_deep_read": false,
+    "expected_paper_ids": ["gnn-1", "gnn-2"],
+    "expected_answer_terms": ["graph neural networks", "formation energy", "band gap"],
+    "papers": [
+      {"id": "gnn-1", "title": "Crystal Graph Neural Networks", "abstract": "Graph neural networks represent crystal structures as atom and bond graphs for formation energy and band gap property prediction.", "authors": ["A. Chen"], "year": 2018, "doi": "10.1000/gnn1", "source": "fixture"},
+      {"id": "gnn-2", "title": "Graph Networks for Materials", "abstract": "Message passing graph models predict mechanical, electronic, and thermodynamic properties of crystalline materials.", "authors": ["B. Lee"], "year": 2021, "doi": "10.1000/gnn2", "source": "fixture"}
+    ]
+  },
+  {
+    "id": "band-gap-overview",
+    "question": "What machine learning approaches predict semiconductor band gaps?",
+    "expect_deep_read": false,
+    "expected_paper_ids": ["gap-1", "gap-2"],
+    "expected_answer_terms": ["band gap", "composition", "crystal"],
+    "papers": [
+      {"id": "gap-1", "title": "Machine Learning Band Gap Prediction", "abstract": "Kernel regression and neural networks predict semiconductor band gaps from composition and crystal descriptors.", "year": 2020, "source": "fixture"},
+      {"id": "gap-2", "title": "Electronic Property Models", "abstract": "Composition features and graph models enable rapid band gap screening for semiconductor materials.", "year": 2022, "source": "fixture"}
+    ]
+  },
+  {
+    "id": "formation-energy-overview",
+    "question": "How is formation energy predicted in materials informatics?",
+    "expect_deep_read": false,
+    "expected_paper_ids": ["energy-1", "energy-2"],
+    "expected_answer_terms": ["formation energy", "crystal structure", "screening"],
+    "papers": [
+      {"id": "energy-1", "title": "Formation Energy Learning", "abstract": "Materials informatics models predict formation energy using elemental descriptors and crystal structure representations.", "year": 2019, "source": "fixture"},
+      {"id": "energy-2", "title": "Thermodynamic Stability Screening", "abstract": "Formation energies from machine learning support high-throughput screening of stable inorganic materials.", "year": 2023, "source": "fixture"}
+    ]
+  },
+  {
+    "id": "battery-discovery-overview",
+    "question": "How does machine learning support solid-state battery material discovery?",
+    "expect_deep_read": false,
+    "expected_paper_ids": ["battery-1", "battery-2"],
+    "expected_answer_terms": ["solid-state battery", "ionic conductivity", "screening"],
+    "papers": [
+      {"id": "battery-1", "title": "Learning Solid Electrolytes", "abstract": "Machine learning accelerates solid-state battery electrolyte discovery by predicting ionic conductivity and stability.", "year": 2021, "source": "fixture"},
+      {"id": "battery-2", "title": "Battery Materials Screening", "abstract": "Data-driven screening identifies solid-state battery materials with favorable transport and electrochemical properties.", "year": 2022, "source": "fixture"}
+    ]
+  },
+  {
+    "id": "alloy-design-overview",
+    "question": "What role does active learning play in alloy design?",
+    "expect_deep_read": false,
+    "expected_paper_ids": ["alloy-1", "alloy-2"],
+    "expected_answer_terms": ["active learning", "alloy", "Bayesian optimization"],
+    "papers": [
+      {"id": "alloy-1", "title": "Active Learning for Alloy Design", "abstract": "Active learning selects informative alloy compositions and reduces the experiments needed for materials design.", "year": 2020, "source": "fixture"},
+      {"id": "alloy-2", "title": "Bayesian Alloy Optimization", "abstract": "Bayesian optimization and active learning guide alloy design toward strength and phase stability objectives.", "year": 2023, "source": "fixture"}
+    ]
+  },
+  {
+    "id": "gnn-architecture-deep",
+    "question": "What architecture and message-passing methods are used for crystal property prediction?",
+    "expect_deep_read": true,
+    "expected_paper_ids": ["arch-1", "arch-2"],
+    "expected_answer_terms": ["message passing", "crystal", "architecture"],
+    "expected_fulltext_terms": ["three message-passing layers", "geometric edge messages"],
+    "papers": [
+      {"id": "arch-1", "title": "Crystal Message Passing Architecture", "abstract": "A graph neural network uses message passing for crystal property prediction.", "year": 2021, "source": "fixture"},
+      {"id": "arch-2", "title": "Equivariant Crystal Networks", "abstract": "Equivariant graph architecture improves prediction of crystal properties.", "year": 2022, "source": "fixture"}
+    ],
+    "fulltext_claims": {
+      "arch-1": ["The architecture applies three message-passing layers followed by pooled crystal features for property prediction."],
+      "arch-2": ["The equivariant method updates atomic features using geometric edge messages and rotationally consistent filters."]
+    }
+  },
+  {
+    "id": "battery-dataset-deep",
+    "question": "Which datasets and experimental setup are used to predict battery ionic conductivity?",
+    "expect_deep_read": true,
+    "expected_paper_ids": ["bdata-1", "bdata-2"],
+    "expected_answer_terms": ["ionic conductivity", "dataset", "impedance spectroscopy"],
+    "expected_fulltext_terms": ["1,200 solid electrolyte", "impedance spectroscopy"],
+    "papers": [
+      {"id": "bdata-1", "title": "Ionic Conductivity Dataset", "abstract": "A materials dataset supports prediction of battery ionic conductivity.", "year": 2022, "source": "fixture"},
+      {"id": "bdata-2", "title": "Solid Electrolyte Benchmark", "abstract": "Experimental battery conductivity measurements provide a benchmark for machine learning.", "year": 2023, "source": "fixture"}
+    ],
+    "fulltext_claims": {
+      "bdata-1": ["The dataset contains measured ionic conductivity values for 1,200 solid electrolyte compositions."],
+      "bdata-2": ["The experimental setup uses impedance spectroscopy and a composition-stratified train-test split."]
+    }
+  },
+  {
+    "id": "potential-performance-deep",
+    "question": "Compare the quantitative performance of machine-learning interatomic potential methods.",
+    "expect_deep_read": true,
+    "expected_paper_ids": ["pot-1", "pot-2"],
+    "expected_answer_terms": ["interatomic potential", "force error", "tradeoff"],
+    "expected_fulltext_terms": ["18 meV per atom", "molecular-dynamics throughput"],
+    "papers": [
+      {"id": "pot-1", "title": "Equivariant Interatomic Potentials", "abstract": "Equivariant machine-learning interatomic potential methods improve force prediction performance.", "year": 2022, "source": "fixture"},
+      {"id": "pot-2", "title": "Potential Benchmark", "abstract": "A benchmark compares accuracy and efficiency across interatomic potential models.", "year": 2024, "source": "fixture"}
+    ],
+    "fulltext_claims": {
+      "pot-1": ["The equivariant model reports an energy error of 18 meV per atom and a force error of 45 meV per angstrom."],
+      "pot-2": ["The benchmark finds a tradeoff between force accuracy, training cost, and molecular-dynamics throughput."]
+    }
+  },
+  {
+    "id": "perovskite-limitations-deep",
+    "question": "What limitations affect machine learning models for perovskite stability?",
+    "expect_deep_read": true,
+    "expected_paper_ids": ["pero-1", "pero-2"],
+    "expected_answer_terms": ["perovskite", "stability", "training distribution"],
+    "expected_fulltext_terms": ["sparse experimental stability data", "absent from the training distribution"],
+    "papers": [
+      {"id": "pero-1", "title": "Perovskite Stability Models", "abstract": "Machine learning predicts perovskite stability from composition and structure.", "year": 2021, "source": "fixture"},
+      {"id": "pero-2", "title": "Generalization in Perovskites", "abstract": "Distribution shift challenges stability prediction for novel perovskite chemistries.", "year": 2023, "source": "fixture"}
+    ],
+    "fulltext_claims": {
+      "pero-1": ["A major limitation is sparse experimental stability data and inconsistent measurement conditions."],
+      "pero-2": ["Models lose accuracy for chemical families that are absent from the training distribution."]
+    }
+  },
+  {
+    "id": "superconductor-mechanism-deep",
+    "question": "What mechanism and detailed evidence connect learned descriptors to superconducting critical temperature?",
+    "expect_deep_read": true,
+    "expected_paper_ids": ["sc-1", "sc-2"],
+    "expected_answer_terms": ["superconducting critical temperature", "descriptor", "causality"],
+    "expected_fulltext_terms": ["phonon-related composition", "without establishing causality"],
+    "papers": [
+      {"id": "sc-1", "title": "Learned Superconductor Descriptors", "abstract": "Learned materials descriptors correlate with superconducting critical temperature.", "year": 2020, "source": "fixture"},
+      {"id": "sc-2", "title": "Interpretable Critical Temperature Models", "abstract": "Interpretable models relate electronic and structural features to superconducting critical temperature.", "year": 2022, "source": "fixture"}
+    ],
+    "fulltext_claims": {
+      "sc-1": ["The learned descriptor emphasizes phonon-related composition features associated with conventional pairing behavior."],
+      "sc-2": ["Feature attribution links electronic density indicators and lattice descriptors to critical-temperature predictions without establishing causality."]
+    }
+  }
+]

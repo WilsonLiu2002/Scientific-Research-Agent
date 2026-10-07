@@ -51,55 +51,54 @@ Not implemented:
 
 ## Visual Overview
 
-GitHub renders the following Mermaid diagrams directly. Together they show the
-runtime boundaries, the agent loop, and the durable memory and authorization model.
+GitHub renders these Mermaid diagrams directly. The workflow comes first because it
+is the fastest way to understand how a question becomes a grounded answer.
+
+### Research workflow
+
+```mermaid
+flowchart LR
+    Q[Question] --> PLAN[Plan and review]
+    PLAN --> SEARCH[Search and index]
+    SEARCH --> RAG[Retrieve and evaluate]
+    RAG --> CRITIC{Evidence sufficient?}
+    CRITIC -->|No| PLAN
+    CRITIC -->|Needs detail| READ[Review and read full text]
+    CRITIC -->|Yes| ANSWER[Synthesize answer]
+    READ --> ANSWER
+    ANSWER --> VERIFY[Verify grounding]
+    VERIFY --> DONE[Saved result]
+```
+
+Human review can edit, approve, skip, or stop work before external search and
+full-text acquisition. Stops and interruptions are durable checkpoints.
 
 ### System architecture
 
 ```mermaid
 flowchart LR
-    USER[Researcher] --> UI[Browser workbench or CLI]
-    UI --> API[FastAPI application]
-    API --> GRAPH[LangGraph research workflow]
-
-    GRAPH --> LLM[Configured LLM or local fallback]
-    GRAPH --> MCP[Academic MCP server]
-    MCP --> OPENALEX[OpenAlex discovery]
-    MCP --> FULLTEXT[Open-access full text]
-    MCP --> MATERIALS[Materials screening tool]
-
-    GRAPH --> RAG[Hybrid RAG retrieval]
-    CORPUS[Versioned local corpus] --> RAG
-    GRAPH --> CORPUS
-    RAG --> INDEX[(Chroma or memory index)]
-
-    GRAPH --> MEMORY[(Project and chat memory)]
-    GRAPH --> CHECKPOINTS[(LangGraph checkpoints)]
-    GRAPH --> TRACES[(Local traces and metrics)]
-    TRACES --> UI
+    UI[Browser or CLI] --> AGENT[LangGraph agent]
+    AGENT --> MODELS[LLM and embeddings]
+    AGENT --> TOOLS[MCP tools]
+    AGENT --> DATA[(RAG corpus and memory)]
+    AGENT --> OBS[Checkpoints and traces]
+    TOOLS --> WEB[OpenAlex and open full text]
 ```
 
 ### Memory and access model
 
 ```mermaid
-flowchart TB
-    PI[Principal Investigator] --> RP[Researcher projects]
-    PI --> LP[Local Reader projects]
-    RESEARCHER[Researcher] --> RP
-    RESEARCHER --> LP
-    LOCAL[Local Reader] --> LP
-
-    PROJECT[Project memory] --> CHAT1[Chat A]
+flowchart LR
+    USER[Authorized user] --> PROJECT[Project]
+    PROJECT --> CHAT1[Chat A]
     PROJECT --> CHAT2[Chat B]
-    CHAT1 --> MESSAGES[Questions and responses]
-    CHAT1 --> RUNS[Research runs]
-    RUNS --> RESULTS[Structured results]
-    RUNS --> CHECKPOINT[Pause and resume checkpoints]
-    RUNS --> TRACE[Execution traces]
-    CHAT2 -. bounded continuity context .-> PLANNER[Intent and query planner]
-    PROJECT -. bounded project context .-> PLANNER
-    PLANNER -. memory guides search but is not cited .-> EVIDENCE[Retrieved evidence]
+    CHAT1 --> RUNS[Messages, runs, results]
+    RUNS --> STATE[Checkpoints and traces]
+    PROJECT -. bounded context .-> PLAN[Next research plan]
 ```
+
+Clearance is hierarchical: Principal Investigator, Researcher, then Local Reader.
+Memory helps plan later searches but is never treated as citable evidence.
 
 ## Quick Start
 
@@ -134,7 +133,7 @@ Then open `http://127.0.0.1:8000`. The workbench runs the same graph as the CLI 
 - a reproducible synthetic model benchmark, clearly separated from published evidence.
 - a Scientific ML workspace for property-constrained material candidate screening.
 
-The current endpoint runs unattended research. Human-review pause/resume controls are not yet exposed in the browser.
+The browser supports human-review pause, edit, approve, skip, stop, and resume controls.
 The local experiment demo uses generated values only. It does not claim to reproduce a published benchmark or laboratory measurement.
 
 ## Scientific ML Candidate Screening
@@ -347,34 +346,9 @@ after a run completes.
 
 ## Workflow
 
-The graph uses bounded loops and explicit decision points:
-
-```mermaid
-flowchart TD
-    START([Start]) --> PLAN[plan_research]
-    PLAN --> SEARCH_REVIEW{review_search_plan}
-    SEARCH_REVIEW -->|Stop| STOPPED([Stopped with checkpoint])
-    SEARCH_REVIEW -->|Approve or edit| SEARCH[search_papers through MCP]
-    SEARCH --> INDEX[index_papers and local corpus]
-    INDEX --> RETRIEVE[retrieve_relevant_papers]
-    RETRIEVE --> EVALUATE[evaluate_evidence]
-    EVALUATE --> CRITIC{critique_research}
-
-    CRITIC -->|Insufficient and budget remains| REFINE[generate_followup_queries]
-    REFINE --> SEARCH_REVIEW
-    CRITIC -->|Detailed reading needed| READ_REVIEW{review_deep_read}
-    READ_REVIEW -->|Approve| READ[deep_read_papers through MCP]
-    READ_REVIEW -->|Skip| CONTEXT[prepare_context]
-    READ_REVIEW -->|Stop| STOPPED
-    READ --> CONTEXT
-    CRITIC -->|Evidence sufficient| CONTEXT
-
-    CONTEXT --> WRITE[write_answer]
-    WRITE --> VERIFY[verify_grounding]
-    VERIFY -->|One bounded repair| WRITE
-    VERIFY --> VALIDATE[validate_answer]
-    VALIDATE --> END([Complete])
-```
+The top-level diagram shows the complete research loop. Internally, the graph keeps
+planning, search, indexing, retrieval, critique, deep reading, synthesis, grounding,
+and validation as separate observable nodes.
 
 With human review enabled, `review_search_plan` is inserted before every `search_papers` batch and `review_deep_read` is inserted before `deep_read_papers`.
 
@@ -980,31 +954,8 @@ tests/             unit, integration, workflow, concurrency, HITL, and evaluatio
 
 ```mermaid
 flowchart LR
-    subgraph NOW[Implemented now]
-        N1[LangGraph with HITL and checkpoints]
-        N2[OpenAlex and full-text MCP tools]
-        N3[Local corpus and hybrid RAG]
-        N4[Project and chat memory with ACL]
-        N5[Local tracing metrics and evaluation]
-    end
-
-    subgraph NEXT[Highest-value next]
-        X1[BM25 plus a stronger reranker]
-        X2[Provider retries caching and rate limits]
-        X3[Second metadata and OA providers]
-        X4[Material tool routing and constraints]
-        X5[Calibrated citation and entailment QA]
-    end
-
-    subgraph LATER[Production path]
-        L1[Real identity and authorization]
-        L2[Production database and object storage]
-        L3[Distributed queues and workers]
-        L4[GROBID and optional OCR]
-        L5[Systematic review protocol]
-    end
-
-    NOW --> NEXT --> LATER
+    NOW[Now: local research workspace] --> NEXT[Next: stronger retrieval and providers]
+    NEXT --> LATER[Later: production identity, storage, and workers]
 ```
 
 The scientific ML shortlist remains an assistive estimate, not a substitute for

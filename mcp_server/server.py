@@ -3,6 +3,7 @@ from __future__ import annotations
 from mcp_server.fulltext import FullTextService
 from mcp_server.openalex import OpenAlexSearchClient
 from app.materials_ml import CandidateScreenRequest, MaterialsScreeningTool
+from app.auth import default_access_grant, resolve_access_token
 from app.observability import log_event, span
 
 try:
@@ -26,10 +27,14 @@ async def search_papers(
     correlation_run_id: str | None = None,
     correlation_trace_id: str | None = None,
     correlation_parent_span_id: str | None = None,
+    simulated_auth_token: str | None = None,
 ) -> list[dict]:
     """MCP tool implementation that searches OpenAlex and returns serialized Paper objects."""
 
-    with span("mcp.server.search_papers", kind="tool", export=False, fields={"tool": "search_papers", "correlation_run_id": correlation_run_id, "correlation_trace_id": correlation_trace_id, "correlation_parent_span_id": correlation_parent_span_id}):
+    grant = resolve_access_token(simulated_auth_token) if simulated_auth_token else default_access_grant()
+    if not grant.allows("literature:search"):
+        raise PermissionError("Token does not permit literature search")
+    with span("mcp.server.search_papers", kind="tool", export=False, fields={"tool": "search_papers", "correlation_run_id": correlation_run_id, "correlation_trace_id": correlation_trace_id, "correlation_parent_span_id": correlation_parent_span_id, "access_level": grant.level}):
         try:
             papers = await search_client.search_papers(query=query, limit=limit)
         except Exception as exc:
@@ -46,10 +51,14 @@ async def get_full_text(
     correlation_run_id: str | None = None,
     correlation_trace_id: str | None = None,
     correlation_parent_span_id: str | None = None,
+    simulated_auth_token: str | None = None,
 ) -> dict | None:
     """MCP tool that acquires and extracts legally accessible open-access article text."""
 
-    with span("mcp.server.get_full_text", kind="tool", export=False, fields={"tool": "get_full_text", "correlation_run_id": correlation_run_id, "correlation_trace_id": correlation_trace_id, "correlation_parent_span_id": correlation_parent_span_id}):
+    grant = resolve_access_token(simulated_auth_token) if simulated_auth_token else default_access_grant()
+    if not grant.allows("fulltext:read"):
+        raise PermissionError("Token does not permit full-text access")
+    with span("mcp.server.get_full_text", kind="tool", export=False, fields={"tool": "get_full_text", "correlation_run_id": correlation_run_id, "correlation_trace_id": correlation_trace_id, "correlation_parent_span_id": correlation_parent_span_id, "access_level": grant.level}):
         try:
             document = await fulltext_service.get_full_text(paper_id=paper_id, doi=doi, url=url)
         except Exception as exc:
@@ -68,10 +77,14 @@ async def screen_material_candidates(
     correlation_run_id: str | None = None,
     correlation_trace_id: str | None = None,
     correlation_parent_span_id: str | None = None,
+    simulated_auth_token: str | None = None,
 ) -> dict:
     """MCP tool that ranks measured material candidates under explicit constraints."""
 
-    with span("mcp.server.screen_material_candidates", kind="tool", export=False, fields={"tool": "screen_material_candidates", "correlation_run_id": correlation_run_id, "correlation_trace_id": correlation_trace_id, "correlation_parent_span_id": correlation_parent_span_id}):
+    grant = resolve_access_token(simulated_auth_token) if simulated_auth_token else default_access_grant()
+    if not grant.allows("materials:read"):
+        raise PermissionError("Token does not permit materials database access")
+    with span("mcp.server.screen_material_candidates", kind="tool", export=False, fields={"tool": "screen_material_candidates", "correlation_run_id": correlation_run_id, "correlation_trace_id": correlation_trace_id, "correlation_parent_span_id": correlation_parent_span_id, "access_level": grant.level}):
         request = CandidateScreenRequest(
             min_band_gap_ev=min_band_gap_ev,
             max_band_gap_ev=max_band_gap_ev,

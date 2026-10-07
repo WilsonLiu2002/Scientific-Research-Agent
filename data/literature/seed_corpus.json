@@ -1,0 +1,46 @@
+[
+  {
+    "id": "local:cgcnn-2018",
+    "title": "Crystal Graph Convolutional Neural Networks for an Accurate and Interpretable Prediction of Material Properties",
+    "abstract": "Crystal graph convolutional neural networks represent periodic crystals directly as graphs of atoms and bonds. The learned representation supports prediction of formation energy, band gap, Fermi energy, bulk modulus, shear modulus, and Poisson ratio and enables screening of materials candidates.",
+    "authors": ["Tian Xie", "Jeffrey C. Grossman"],
+    "year": 2018,
+    "doi": "10.1103/PhysRevLett.120.145301",
+    "venue": "Physical Review Letters",
+    "url": "https://doi.org/10.1103/PhysRevLett.120.145301",
+    "source": "local-curated-corpus"
+  },
+  {
+    "id": "local:megnet-2019",
+    "title": "Graph Networks as a Universal Machine Learning Framework for Molecules and Crystals",
+    "abstract": "MEGNet models encode atoms, bonds, and global state attributes in a graph network. Transfer learning from formation energies improves data-limited predictions, while learned elemental embeddings provide chemically meaningful structure for molecular and crystalline property prediction.",
+    "authors": ["Chi Chen", "Weike Ye", "Yunxing Zuo", "Chen Zheng", "Shyue Ping Ong"],
+    "year": 2019,
+    "doi": "10.1021/acs.chemmater.9b01294",
+    "venue": "Chemistry of Materials",
+    "url": "https://doi.org/10.1021/acs.chemmater.9b01294",
+    "source": "local-curated-corpus"
+  },
+  {
+    "id": "local:matbench-2020",
+    "title": "Benchmarking Materials Property Prediction Methods: The Matbench Test Set and Automatminer Reference Algorithm",
+    "abstract": "Matbench defines standardized materials-property datasets, train-test splits, and evaluation metrics. It supports reproducible comparison of machine-learning methods across regression and classification tasks and highlights the importance of leakage-resistant evaluation.",
+    "authors": ["Alexander Dunn", "Qi Wang", "Alex Ganose", "Daniel Dopp", "Anubhav Jain"],
+    "year": 2020,
+    "doi": "10.1038/s41524-020-00406-3",
+    "venue": "npj Computational Materials",
+    "url": "https://doi.org/10.1038/s41524-020-00406-3",
+    "source": "local-curated-corpus"
+  },
+  {
+    "id": "local:alignn-2021",
+    "title": "Atomistic Line Graph Neural Network for Improved Materials Property Predictions",
+    "abstract": "ALIGNN alternates message passing on atomistic graphs and their line graphs to incorporate bond-angle information. The architecture improves predictions for multiple crystal and molecular properties while retaining an atomistic representation suitable for candidate screening.",
+    "authors": ["Kamal Choudhary", "Brian DeCost"],
+    "year": 2021,
+    "doi": "10.1038/s41524-021-00650-1",
+    "venue": "npj Computational Materials",
+    "url": "https://doi.org/10.1038/s41524-021-00650-1",
+    "source": "local-curated-corpus"
+  }
+]

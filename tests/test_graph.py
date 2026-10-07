@@ -31,6 +31,42 @@ class FakeSearchClient:
         ]
 
 
+class ForbiddenSearchClient:
+    """Fail loudly if a local-only authorization tier reaches external search."""
+
+    def search_papers(self, query: str, limit: int = 10) -> list[Paper]:
+        raise AssertionError("External search must not run for a local reader")
+
+
+def test_local_reader_retrieves_from_embedded_corpus_without_openalex() -> None:
+    """Exercise RAG against durable local documents without calling an external tool."""
+
+    builder = ResearchGraphBuilder(
+        search_client=ForbiddenSearchClient(),
+        vector_store=create_vector_store(force_memory=True),
+    )
+    state = {
+        "question": "How do graph neural networks predict crystal properties?",
+        "papers": [],
+        "errors": [],
+        "access_profile": {
+            "token_id": "sim-local-reader",
+            "level": "local_reader",
+            "label": "Local Reader",
+            "capabilities": ["rag:read"],
+        },
+    }
+    state.update(builder.plan_research(state))
+    state.update(builder.search_papers(state))
+    state.update(builder.index_papers(state))
+    state.update(builder.retrieve_relevant_papers(state))
+
+    assert state["local_corpus_paper_count"] >= 4
+    assert state["retrieved_passages"]
+    assert all(passage.paper.source == "local-curated-corpus" for passage in state["retrieved_passages"])
+    assert all(task.status == "skipped" for task in state["subtasks"])
+
+
 def test_graph_honors_cancellation_before_planning() -> None:
     cancellation = threading.Event()
     cancellation.set()

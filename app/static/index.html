@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Inspect literature search, evidence, and grounded scientific answers.">
   <title>Research Atlas</title>
-  <link rel="stylesheet" href="/static/styles.css?v=hitl-2">
+  <link rel="stylesheet" href="/static/styles.css?v=memory-3">
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
-  <script src="/static/app.js?v=hitl-2" defer></script>
+  <script src="/static/app.js?v=memory-3" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -15,11 +15,31 @@
       <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
       <span>Research Atlas</span>
     </a>
+    <button class="icon-button memory-toggle" id="memory-toggle" type="button" aria-label="Toggle projects and chats" title="Projects and chats">
+      <i data-lucide="panel-left"></i>
+    </button>
     <div class="system-status" id="system-status"><span class="status-dot"></span>MCP connected · local inference</div>
     <button class="icon-button" id="theme-toggle" type="button" aria-label="Toggle color theme" title="Toggle color theme">
       <i data-lucide="sun"></i>
     </button>
   </header>
+
+  <aside class="memory-sidebar" id="memory-sidebar" aria-label="Research memory">
+    <div class="memory-header">
+      <div><p class="eyebrow">Research memory</p><h2>Projects</h2></div>
+      <button class="memory-icon-button" id="new-project" type="button" title="New project" aria-label="New project"><i data-lucide="folder-plus"></i></button>
+    </div>
+    <form class="memory-create hidden" id="project-create-form">
+      <input id="project-name" maxlength="80" placeholder="Project name" required>
+      <button type="submit" title="Create project" aria-label="Create project"><i data-lucide="check"></i></button>
+    </form>
+    <div class="project-list" id="project-list"></div>
+    <div class="chat-heading">
+      <div><span>Chats</span><strong id="active-project-name">No project</strong></div>
+      <button class="memory-icon-button" id="new-chat" type="button" title="New chat" aria-label="New chat"><i data-lucide="message-square-plus"></i></button>
+    </div>
+    <div class="chat-list" id="chat-list"></div>
+  </aside>
 
   <main>
     <section class="query-band" aria-labelledby="query-heading">
@@ -30,6 +50,14 @@
       <form id="research-form" class="query-form">
         <label class="sr-only" for="question">Research question</label>
         <textarea id="question" name="question" rows="2" minlength="8" required>How are graph neural networks used for crystal property prediction?</textarea>
+        <label class="access-selector" for="access-token">
+          <span>Authorization</span>
+          <select id="access-token" name="access-token">
+            <option value="sim-local-reader">Local Reader</option>
+            <option value="sim-researcher" selected>Researcher</option>
+            <option value="sim-principal-investigator">Principal Investigator</option>
+          </select>
+        </label>
         <button class="stop-run-button hidden" id="stop-run" type="button" title="Stop the active research run">
           <i data-lucide="square"></i><span>Stop</span>
         </button>
@@ -37,12 +65,6 @@
           <i data-lucide="play"></i><span>Run research</span>
         </button>
       </form>
-      <div class="example-row" aria-label="Example questions">
-        <button class="demo-button" id="experiment-demo" type="button"><i data-lucide="flask-conical"></i>Local experiment demo</button>
-        <button type="button" data-question="What methods and datasets are used for crystal property prediction?">Methods & datasets</button>
-        <button type="button" data-question="What are the limitations of machine learning for perovskite stability prediction?">Perovskite limitations</button>
-        <button type="button" data-question="How accurately do machine-learned potentials predict materials properties?">Potential performance</button>
-      </div>
     </section>
 
     <section class="workspace" id="workspace" aria-live="polite">
@@ -50,6 +72,7 @@
         <div class="rail-heading">
           <span>Run overview</span><span class="run-id" id="run-id">READY</span>
         </div>
+        <p class="access-summary" id="access-summary">Researcher · local RAG + literature search</p>
         <div class="metric-grid">
           <div class="metric"><span>Coverage</span><strong id="metric-coverage">—</strong></div>
           <div class="metric"><span>Papers</span><strong id="metric-papers">—</strong></div>
@@ -66,6 +89,7 @@
 
       <div class="content-area">
         <nav class="tabs" aria-label="Research result views">
+          <button type="button" data-tab="chat"><i data-lucide="messages-square"></i>Chat</button>
           <button class="active" type="button" data-tab="report"><i data-lucide="file-text"></i>Report</button>
           <button type="button" data-tab="evidence"><i data-lucide="network"></i>Evidence</button>
           <button type="button" data-tab="papers"><i data-lucide="library"></i>Papers</button>
@@ -83,6 +107,10 @@
           </div>
         </div>
 
+        <section class="panel" id="panel-chat" aria-label="Chat history">
+          <div class="panel-header"><div><p class="eyebrow">Conversation memory</p><h2 id="chat-panel-title">New chat</h2></div><span class="local-badge" id="chat-status">Saved locally</span></div>
+          <div class="conversation" id="conversation"><p class="telemetry-empty">Questions and completed research responses will appear here.</p></div>
+        </section>
         <section class="panel active" id="panel-report" aria-label="Research report">
           <div class="panel-header"><div><p class="eyebrow">Grounded synthesis</p><h2>Research report</h2></div><button class="icon-button" id="copy-report" type="button" title="Copy report" aria-label="Copy report"><i data-lucide="copy"></i></button></div>
           <article class="report" id="report"></article>
@@ -96,7 +124,7 @@
           <div class="paper-list" id="paper-list"></div>
         </section>
         <section class="panel" id="panel-trace" aria-label="Execution trace">
-          <div class="panel-header"><div><p class="eyebrow">Local observability</p><h2>Execution trace</h2></div><span class="local-badge">Stored locally</span></div>
+          <div class="panel-header"><div><p class="eyebrow">Local observability</p><h2>Execution trace</h2></div><span class="local-badge" id="trace-badge">Stored locally</span></div>
           <div class="trace-list" id="trace-list"></div>
           <section class="telemetry-section" aria-label="Performance telemetry">
             <div class="telemetry-heading"><div><p class="eyebrow">Redacted telemetry</p><h3>Operations and latency</h3></div><code id="trace-correlation">No trace loaded</code></div>

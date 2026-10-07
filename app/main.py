@@ -6,12 +6,17 @@ import uuid
 from typing import Any
 
 from app.graph import build_research_graph
+from app.auth import default_access_grant, resolve_access_token
 from app.observability import log_event, persist_local_trace, research_run
+from app.rag import create_vector_store
 from app.state import ResearchState
 
 
 def initial_research_state(
-    question: str, run_id: str | None = None, trace_id: str | None = None
+    question: str,
+    run_id: str | None = None,
+    trace_id: str | None = None,
+    access_profile: dict[str, Any] | None = None,
 ) -> ResearchState:
     """Create the common initial state used by interactive and unattended runs."""
 
@@ -19,6 +24,7 @@ def initial_research_state(
         "question": question,
         "run_id": run_id or uuid.uuid4().hex,
         "trace_id": trace_id or uuid.uuid4().hex,
+        "access_profile": access_profile or default_access_grant().public_payload(),
         "papers": [],
         "retrieved_papers": [],
         "retrieved_passages": [],
@@ -31,12 +37,19 @@ def run(
     question: str,
     interactive: bool = False,
     thread_id: str | None = None,
+    access_token: str | None = None,
 ) -> ResearchState:
     """Run the complete research-agent workflow for one user question."""
 
     with research_run() as telemetry:
-        graph = build_research_graph(enable_human_review=interactive)
-        initial_state = initial_research_state(question, telemetry.run_id, telemetry.trace_id)
+        grant = resolve_access_token(access_token) if access_token else default_access_grant()
+        graph = build_research_graph(
+            enable_human_review=interactive,
+            vector_store=create_vector_store(access_scope=grant.level),
+        )
+        initial_state = initial_research_state(
+            question, telemetry.run_id, telemetry.trace_id, grant.public_payload()
+        )
         result = (
             graph.invoke(initial_state)
             if not interactive

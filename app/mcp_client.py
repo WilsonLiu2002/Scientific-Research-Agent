@@ -15,6 +15,8 @@ from app.observability import correlation_fields, log_event, metrics_increment, 
 class AcademicMCPClient:
     """Synchronous facade used by LangGraph nodes to call the academic MCP search tool."""
 
+    authorization_token: str | None = None
+
     def search_papers(self, query: str, limit: int = 10) -> list[Paper]:
         """Call the MCP `search_papers` tool."""
 
@@ -72,6 +74,7 @@ class AcademicMCPClient:
         fields = correlation_fields()
         propagated = {
             **arguments,
+            "simulated_auth_token": self.authorization_token,
             "correlation_run_id": fields["run_id"],
             "correlation_trace_id": fields["trace_id"],
             "correlation_parent_span_id": fields["parent_span_id"],

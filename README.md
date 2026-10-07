@@ -1,6 +1,6 @@
 # Scientific Literature Research Agent
 
-A working Python research-agent MVP for materials-science literature questions. It searches OpenAlex, retrieves and ranks abstract passages, optionally deep-reads open-access articles, builds a bounded evidence context, and produces an answer with validated citations.
+A working Python research-agent MVP for materials-science literature questions. It retrieves from a durable local corpus, optionally expands discovery through OpenAlex, ranks evidence passages, deep-reads authorized open-access articles, and produces an answer with validated citations.
 
 This repository is intentionally small and inspectable. It includes a CLI, Python library, and local browser workbench; it is not a hosted multi-user service.
 
@@ -16,6 +16,8 @@ Implemented and tested:
 - OpenAlex metadata and abstract search
 - DOI-aware paper deduplication
 - Passage-level hybrid retrieval with Chroma or an in-memory fallback
+- Versioned local literature corpus and persistent embedded Chroma index
+- Simulated user-level tokens for RAG, MCP tool, full-text, and materials-database authorization
 - Optional OpenAI embeddings and answer synthesis
 - Deterministic local operation without an OpenAI key
 - Selective open-access PDF, JATS/XML, and HTML reading
@@ -31,8 +33,11 @@ Implemented and tested:
 - Local persisted tracing and an integrated inspector for graph, LLM, MCP, and retrieval operations
 - End-of-run latency, usage, research-volume, retry, error, and goal-status metrics
 - Human approval before searches and full-text acquisition
+- Durable project memory with multiple reopenable chats and saved structured results
+- Bounded chat/project continuity context for intent and query planning
+- Server-enforced hierarchical access control for projects, chats, runs, and checkpoints
 - Offline evaluation with distractors, retrieval metrics, grounding checks, and quality gates
-- 59 automated tests
+- 75 automated tests
 
 Not implemented:
 
@@ -40,10 +45,61 @@ Not implemented:
 - OCR for scanned PDFs
 - GROBID or a comparable production scholarly-document parser
 - User accounts or hosted multi-user deployment
-- Durable database-backed human-review checkpoints by default
 - Production monitoring, distributed queues, or multi-machine workers
 - A complete systematic-review protocol
 - Guaranteed factual correctness; model-based entailment remains probabilistic
+
+## Visual Overview
+
+GitHub renders the following Mermaid diagrams directly. Together they show the
+runtime boundaries, the agent loop, and the durable memory and authorization model.
+
+### System architecture
+
+```mermaid
+flowchart LR
+    USER[Researcher] --> UI[Browser workbench or CLI]
+    UI --> API[FastAPI application]
+    API --> GRAPH[LangGraph research workflow]
+
+    GRAPH --> LLM[Configured LLM or local fallback]
+    GRAPH --> MCP[Academic MCP server]
+    MCP --> OPENALEX[OpenAlex discovery]
+    MCP --> FULLTEXT[Open-access full text]
+    MCP --> MATERIALS[Materials screening tool]
+
+    GRAPH --> RAG[Hybrid RAG retrieval]
+    CORPUS[Versioned local corpus] --> RAG
+    GRAPH --> CORPUS
+    RAG --> INDEX[(Chroma or memory index)]
+
+    GRAPH --> MEMORY[(Project and chat memory)]
+    GRAPH --> CHECKPOINTS[(LangGraph checkpoints)]
+    GRAPH --> TRACES[(Local traces and metrics)]
+    TRACES --> UI
+```
+
+### Memory and access model
+
+```mermaid
+flowchart TB
+    PI[Principal Investigator] --> RP[Researcher projects]
+    PI --> LP[Local Reader projects]
+    RESEARCHER[Researcher] --> RP
+    RESEARCHER --> LP
+    LOCAL[Local Reader] --> LP
+
+    PROJECT[Project memory] --> CHAT1[Chat A]
+    PROJECT --> CHAT2[Chat B]
+    CHAT1 --> MESSAGES[Questions and responses]
+    CHAT1 --> RUNS[Research runs]
+    RUNS --> RESULTS[Structured results]
+    RUNS --> CHECKPOINT[Pause and resume checkpoints]
+    RUNS --> TRACE[Execution traces]
+    CHAT2 -. bounded continuity context .-> PLANNER[Intent and query planner]
+    PROJECT -. bounded project context .-> PLANNER
+    PLANNER -. memory guides search but is not cited .-> EVIDENCE[Retrieved evidence]
+```
 
 ## Quick Start
 
@@ -245,53 +301,79 @@ python -m app.main --resume-thread-id crystal-review-01
 
 The checkpoint is committed before the review prompt appears. Ending the terminal at that prompt does not lose completed planning or search work, and resumption does not rerun completed graph nodes.
 
-The browser workbench uses the same checkpointed workflow. Submitting a question opens a review dialog before search and, when requested, before full-text acquisition. The dialog supports query editing, paper selection, new reviewer guidance, skipping full text, approval, and immediate stop. A separate Stop control remains available while planning, searching, retrieving, deep reading, synthesizing, or verifying. It releases the browser immediately and signals cooperative backend cancellation; a provider request already in flight may run until its configured timeout, but no later graph operation will begin. Refreshing the page does not delete the SQLite checkpoint, although reopening an unfinished browser session by ID is currently exposed through the API rather than a session-history screen.
+The browser workbench uses the same checkpointed workflow. Submitting a question opens a review dialog before search and, when requested, before full-text acquisition. The dialog supports query editing, paper selection, new reviewer guidance, skipping full text, approval, and immediate stop. A separate Stop control remains available while planning, searching, retrieving, deep reading, synthesizing, or verifying. It releases the browser immediately and signals cooperative backend cancellation; a provider request already in flight may run until its configured timeout, but no later graph operation will begin. Refreshing the page does not delete the SQLite checkpoint, and reopening a paused chat restores its pending review.
+
+### Project and chat memory
+
+The browser stores a user-facing workspace hierarchy in
+`.cache/memory/workspaces.sqlite`:
+
+- a project is a durable research workspace;
+- each project can contain multiple independent chats;
+- each chat stores ordered user questions and assistant responses;
+- assistant messages retain the complete structured result, so reopening restores
+  the report, evidence, papers, and trace without rerunning research;
+- paused chats retain their checkpoint thread and reopen the pending HITL review.
+
+Before a new run, the agent builds a bounded continuity packet from recent messages
+in the current chat and sibling chats in the same project. This context is used only
+for intent interpretation and search-query planning. It is explicitly treated as
+untrusted memory, never as scientific evidence or a citation source. Configure the
+database with `MEMORY_DB_PATH`.
+
+### Simulated authorization
+
+The browser includes an authorization dropdown for demonstrating capability-based
+access. These are fixed local simulation tokens, not production authentication:
+
+- **Local Reader**: embedded literature RAG only;
+- **Researcher**: local RAG, OpenAlex/MCP search, and the materials database;
+- **Principal Investigator**: Researcher capabilities plus full-text acquisition.
+
+The browser sends a token ID, and the server resolves the capability set. It does
+not trust a browser-provided role. The token ID and resolved non-secret profile are
+preserved in checkpoint state so resumed work keeps the same permissions. MCP tools
+validate the propagated token again at the server boundary. Replace this simulation
+with signed identity tokens and a real policy service before any multi-user deployment.
+
+Projects are stamped with the creating tier and chats inherit their project's minimum
+access level. Clearance is hierarchical: Principal Investigator can access Researcher
+and Local Reader workspaces, Researcher can access Local Reader workspaces, and Local
+Reader cannot access higher-tier projects or chats. The API enforces this policy for
+listing, opening, creating chats, starting runs, restoring checkpoints, resuming,
+cancelling, and reading live traces. UI filtering is only a convenience and is not
+the authorization boundary. Historical thread-to-chat mappings preserve the boundary
+after a run completes.
 
 ## Workflow
 
-The default unattended graph is:
+The graph uses bounded loops and explicit decision points:
 
-```text
-START
-  |
-  v
-plan_research
-  |  creates goal, success criteria, queries, and search subtasks
-  v
-search_papers
-  |  executes approved search subtasks concurrently through MCP
-  v
-index_papers
-  |
-  v
-retrieve_relevant_papers
-  |
-  v
-evaluate_evidence
-  |
-  v
-critique_research
-  |\
-  | \ insufficient and budget remains
-  |  +--> generate_followup_queries --> search_papers
-  |
-  +---- detailed question --> deep_read_papers
-  |                           |  MCP acquisition + graph-owned evidence extraction
-  |                           |
-  |                           v
-  +---------------------> prepare_context
-                              |
-                              v
-                         write_answer
-                              |
-                              v
-                       verify_grounding
-                              |
-                              v
-                        validate_answer
-                              |
-                              v
-                             END
+```mermaid
+flowchart TD
+    START([Start]) --> PLAN[plan_research]
+    PLAN --> SEARCH_REVIEW{review_search_plan}
+    SEARCH_REVIEW -->|Stop| STOPPED([Stopped with checkpoint])
+    SEARCH_REVIEW -->|Approve or edit| SEARCH[search_papers through MCP]
+    SEARCH --> INDEX[index_papers and local corpus]
+    INDEX --> RETRIEVE[retrieve_relevant_papers]
+    RETRIEVE --> EVALUATE[evaluate_evidence]
+    EVALUATE --> CRITIC{critique_research}
+
+    CRITIC -->|Insufficient and budget remains| REFINE[generate_followup_queries]
+    REFINE --> SEARCH_REVIEW
+    CRITIC -->|Detailed reading needed| READ_REVIEW{review_deep_read}
+    READ_REVIEW -->|Approve| READ[deep_read_papers through MCP]
+    READ_REVIEW -->|Skip| CONTEXT[prepare_context]
+    READ_REVIEW -->|Stop| STOPPED
+    READ --> CONTEXT
+    CRITIC -->|Evidence sufficient| CONTEXT
+
+    CONTEXT --> WRITE[write_answer]
+    WRITE --> VERIFY[verify_grounding]
+    VERIFY -->|One bounded repair| WRITE
+    VERIFY --> VALIDATE[validate_answer]
+    VALIDATE --> END([Complete])
 ```
 
 With human review enabled, `review_search_plan` is inserted before every `search_papers` batch and `review_deep_read` is inserted before `deep_read_papers`.
@@ -310,7 +392,7 @@ Planning is a two-stage structured operation. Before generating keywords, the pl
 
 It then creates three to five non-redundant search queries. Each query has an evidence angle and rationale. The graph preserves this as `research_intent` and `query_rationales` for review and debugging.
 
-RAG does not retrieve against the raw question alone. It builds complementary probes from the original question, identified entities, purpose terminology, and evidence requirements. Rankings are fused while retaining the original question as the anchor. Context selection adds purpose alignment, source diversity, duplicate removal, full-text provenance, and token budgeting. The synthesis context explicitly states the purpose and required evidence so the answer cannot quietly collapse into a generic overview.
+RAG does not retrieve against the raw question alone. It builds complementary probes from the original question, identified entities, purpose terminology, and evidence requirements. Rankings are fused while retaining the original question as the anchor. The indexed corpus always includes the checked-in records in `data/literature/seed_corpus.json` for authorized users, then merges papers discovered during the current OpenAlex search. This means RAG remains active in local-only mode and is no longer dependent on live internet results. Context selection adds purpose alignment, source diversity, duplicate removal, full-text provenance, and token budgeting.
 
 ## Goals And Subtasks
 
@@ -399,14 +481,19 @@ LOCAL_TRACE_ENABLED=true
 LOCAL_TRACE_DIR=.cache/traces
 ```
 
-Each completed execution is stored atomically as one redacted JSON document
-named by `trace_id`. Open the **Trace** tab in the browser workbench after a
-research run to inspect correlation IDs, summary metrics, graph nodes, routing
-decisions, nested subtasks, tool/model operations, failures, and latency. The
-same data is available through `GET /api/traces?limit=25` and
-`GET /api/traces/{trace_id}`. Storage failures are logged but never fail the
-research workflow. Human-review interruptions are recorded as interruptions,
-not errors, and resumed work keeps the same run context.
+Each execution is streamed into the browser's **Trace** tab while research is
+still running. The workbench polls incremental redacted events and shows active
+and completed graph nodes, retrieval, tool, and model operations without waiting
+for the final answer. Live events are available through
+`GET /api/research/sessions/{thread_id}/trace?after={event_count}`.
+
+Completed executions are stored atomically as redacted JSON documents named by
+`trace_id`. Inspect correlation IDs, summary metrics, routing decisions, nested
+subtasks, failures, and latency in the same **Trace** tab or through
+`GET /api/traces?limit=25` and `GET /api/traces/{trace_id}`. Storage and live
+display failures never fail the research workflow. Human-review interruptions
+are recorded as interruptions, not errors, and resumed work keeps the same run
+context.
 
 ### RAG and LLM telemetry
 
@@ -573,7 +660,12 @@ Embedding selection:
 - `EMBEDDING_PROVIDER=openai` plus `OPENAI_API_KEY`: OpenAI embeddings;
 - otherwise: deterministic 128-dimensional hash embeddings.
 
-Chroma is ephemeral by default. A persistent directory can be passed to `ChromaVectorStore`, but the CLI does not enable persistence automatically.
+When Chroma is installed, its embedded index persists at `.cache/chroma` by
+default. Override it with `RAG_PERSIST_DIRECTORY`. Collections are separated by
+authorization level so a lower tier cannot retrieve records indexed by a higher
+tier. If Chroma is unavailable, the agent uses the same local corpus through an in-memory vector store. OpenAlex results
+are merged into the index per run; passage provenance distinguishes
+`local-curated-corpus` from external sources.
 
 Current retrieval limitations:
 
@@ -711,6 +803,8 @@ The compiled graph returns a `ResearchState` dictionary. Useful fields include:
 | `human_review_history` | Approved, edited, skipped, or cancelled review decisions |
 | `reviewer_instructions` | Durable human guidance applied to retrieval and synthesis |
 | `checkpoint_thread_id` | Stable ID used to resume an interactive run |
+| `memory_context` | Bounded current-chat and project continuity supplied to planning |
+| `memory_stats` | Counts and size of the continuity context |
 | `errors` | Recoverable provider or subtask errors |
 
 ## Configuration
@@ -730,6 +824,7 @@ Environment variables:
 | `OPENALEX_MAILTO` | No | unset | Identifies the caller to OpenAlex |
 | `FULLTEXT_CACHE_DIR` | No | `.cache/fulltext` | Full-text extraction cache directory |
 | `CHECKPOINT_DB_PATH` | No | `.cache/checkpoints/research.sqlite` | Durable SQLite state for human-review threads |
+| `MEMORY_DB_PATH` | No | `.cache/memory/workspaces.sqlite` | Projects, chats, messages, and saved research results |
 
 Graph options are Python constructor arguments:
 
@@ -754,7 +849,7 @@ Run all tests:
 pytest -q
 ```
 
-The current suite has 65 tests covering:
+The current suite has 75 tests covering:
 
 - models and deduplication;
 - OpenAlex parsing;
@@ -772,6 +867,9 @@ The current suite has 65 tests covering:
 - offline evaluation metrics.
 - material formula parsing, measured-property screening, prediction provenance, and material APIs.
 - telemetry correlation, nesting, concurrency, redaction, failure isolation, and sync/async summaries.
+- simulated authorization enforcement and local-only embedded-corpus retrieval.
+- durable projects, multiple chats, idempotent messages, and bounded workspace context.
+- hierarchical project/chat authorization and higher-tier access inheritance.
 
 Tests use fakes and recorded fixtures; they do not require network access.
 
@@ -852,6 +950,7 @@ app/
   models.py        Pydantic domain models
   observability.py structured logs, local traces, correlation, persistence, and metrics
   rag.py           embeddings, Chroma/in-memory stores, chunking, and hybrid retrieval
+  memory.py        durable projects, chats, messages, results, and planning context
   skill_loader.py  repository skill loader
   state.py         LangGraph state contract
   web.py           FastAPI workbench and research API
@@ -877,20 +976,44 @@ skills/
 tests/             unit, integration, workflow, concurrency, HITL, and evaluation tests
 ```
 
-## Known Risks And Recommended Next Work
+## Roadmap And Known Risks
 
-The highest-value next improvements are:
+```mermaid
+flowchart LR
+    subgraph NOW[Implemented now]
+        N1[LangGraph with HITL and checkpoints]
+        N2[OpenAlex and full-text MCP tools]
+        N3[Local corpus and hybrid RAG]
+        N4[Project and chat memory with ACL]
+        N5[Local tracing metrics and evaluation]
+    end
 
-1. Add a structure-aware pretrained model adapter such as CHGNet or MatGL in an isolated, compatible scientific Python environment.
-2. Connect material `[M#]` evidence to the LangGraph planner so property questions can explicitly request the screening tool.
-3. Add stability, formation-energy, toxicity, abundance, and synthesizability constraints before treating the output as a practical shortlist.
-4. Replace normalized token overlap with BM25 and add a strong reranker.
-5. Add GROBID and optional OCR for more reliable scholarly PDF extraction.
-6. Add retries, exponential backoff, rate-limit handling, and provider response caching.
-7. Add a second metadata provider and an open-access resolver such as Unpaywall.
-8. Calibrate the semantic verifier against manually labeled entailment cases.
-9. Persist research sessions and LangGraph checkpoints in production storage.
-10. Add structured logging, tracing, latency, cost, and cache-hit metrics.
+    subgraph NEXT[Highest-value next]
+        X1[BM25 plus a stronger reranker]
+        X2[Provider retries caching and rate limits]
+        X3[Second metadata and OA providers]
+        X4[Material tool routing and constraints]
+        X5[Calibrated citation and entailment QA]
+    end
+
+    subgraph LATER[Production path]
+        L1[Real identity and authorization]
+        L2[Production database and object storage]
+        L3[Distributed queues and workers]
+        L4[GROBID and optional OCR]
+        L5[Systematic review protocol]
+    end
+
+    NOW --> NEXT --> LATER
+```
+
+The scientific ML shortlist remains an assistive estimate, not a substitute for
+structure-aware simulation or experimental validation. The most important model-side
+extension is an isolated CHGNet or MatGL adapter, followed by stability,
+formation-energy, toxicity, abundance, and synthesizability constraints. The most
+important retrieval extension is BM25 plus a learned reranker. Production deployment
+also requires real identities, durable shared storage, background workers, and a
+document-retention policy.
 
 ## License And Content Note
 

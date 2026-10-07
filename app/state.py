@@ -21,6 +21,9 @@ class ResearchState(TypedDict, total=False):
     question: str
     run_id: str
     trace_id: str
+    access_profile: dict[str, Any]
+    memory_context: str
+    memory_stats: dict[str, int]
     checkpoint_thread_id: str
     run_metrics: dict[str, Any]
     run_trace: dict[str, Any]
@@ -31,6 +34,7 @@ class ResearchState(TypedDict, total=False):
     retrieval_probes: list[str]
     papers: list[Paper]
     indexed_paper_count: int
+    local_corpus_paper_count: int
     retrieved_papers: list[Paper]
     retrieved_passages: list[EvidencePassage]
     answer: str | None

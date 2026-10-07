@@ -354,13 +354,19 @@ def select_embedding_function() -> EmbeddingFunction:
     return LocalHashEmbeddingFunction()
 
 
-def create_vector_store(force_memory: bool = False) -> ChromaVectorStore | InMemoryVectorStore:
-    """Create the preferred vector store, falling back to memory if Chroma is unavailable."""
+def create_vector_store(
+    force_memory: bool = False, access_scope: str = "principal_investigator"
+) -> ChromaVectorStore | InMemoryVectorStore:
+    """Create a persistent embedded index, falling back to memory when Chroma is absent."""
 
     if force_memory:
         return InMemoryVectorStore()
+    safe_scope = re.sub(r"[^a-z0-9_-]", "-", access_scope.lower())[:40]
     try:
-        return ChromaVectorStore()
+        return ChromaVectorStore(
+            collection_name=f"scientific_papers_{safe_scope}",
+            persist_directory=os.getenv("RAG_PERSIST_DIRECTORY", ".cache/chroma")
+        )
     except (ImportError, ModuleNotFoundError):
         return InMemoryVectorStore()
 

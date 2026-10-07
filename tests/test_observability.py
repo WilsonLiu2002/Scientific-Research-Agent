@@ -46,6 +46,26 @@ def test_nested_spans_preserve_run_trace_and_parent_ids(monkeypatch) -> None:
     assert child_start.fields["parent_span_id"] == parent_id
 
 
+def test_research_run_streams_redacted_events_live() -> None:
+    streamed: list[dict] = []
+
+    with observability.research_run(
+        run_id="live-run", trace_id="live-trace", event_sink=streamed.append
+    ):
+        with observability.span("live-operation"):
+            observability.log_event("provider.result", api_key="must-not-leak")
+
+    assert [event["event"] for event in streamed] == [
+        "operation.started",
+        "operation.started",
+        "provider.result",
+        "operation.completed",
+        "operation.completed",
+    ]
+    assert streamed[2]["api_key"] == "[REDACTED]"
+    assert all(event["run_id"] == "live-run" for event in streamed)
+
+
 def test_error_and_retry_metrics_are_recorded(monkeypatch) -> None:
     handler = capture_agent_records(monkeypatch)
 

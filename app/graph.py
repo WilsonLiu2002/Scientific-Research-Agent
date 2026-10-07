@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from app.context import ResearchContextBuilder
+from app.local_corpus import LocalLiteratureCorpus
 from app.checkpointing import create_durable_checkpointer
 from app.critic import ResearchCritic, create_default_critic
 from app.evidence import PaperEvidenceExtractor
@@ -83,6 +84,7 @@ class ResearchGraphBuilder:
         max_critic_retries: int = 2,
         max_concurrent_tasks: int = 4,
         cancellation_event: Any | None = None,
+        local_corpus: LocalLiteratureCorpus | None = None,
     ) -> None:
         self.search_client = search_client or AcademicMCPClient()
         self.vector_store = vector_store or create_vector_store()
@@ -101,6 +103,7 @@ class ResearchGraphBuilder:
         self.max_critic_retries = max(0, max_critic_retries)
         self.max_concurrent_tasks = max(1, max_concurrent_tasks)
         self.cancellation_event = cancellation_event
+        self.local_corpus = local_corpus or LocalLiteratureCorpus()
 
     def check_cancelled(self) -> None:
         """Stop before another costly operation when the browser cancels a run."""
@@ -113,7 +116,11 @@ class ResearchGraphBuilder:
 
         self.check_cancelled()
         skill = state.get("skill") or load_skill("literature-research")
-        plan = generate_research_plan(question=state["question"], skill=skill)
+        plan = generate_research_plan(
+            question=state["question"],
+            skill=skill,
+            memory_context=state.get("memory_context"),
+        )
         self.check_cancelled()
         queries = [item.query for item in plan.queries]
         criteria = [
@@ -129,7 +136,8 @@ class ResearchGraphBuilder:
             "query_rationales": {item.query: item.rationale for item in plan.queries},
             "search_iteration": 1,
             "searched_queries": [],
-            "deep_read_requested": self.enable_full_text
+            "deep_read_requested": access_allows(state, "fulltext:read")
+            and self.enable_full_text
             and question_requires_full_text(state["question"]),
             "fulltext_attempted": False,
             "human_review_history": [],
@@ -238,6 +246,26 @@ class ResearchGraphBuilder:
             for index, query in enumerate(pending_queries, start=1)
         ]
 
+        if not access_allows(state, "literature:search"):
+            skipped = {
+                task.id: task.model_copy(
+                    update={"status": "skipped", "error": "Authorization tier permits local RAG only"}
+                )
+                for task in pending_tasks
+            }
+            log_event(
+                "authorization.denied",
+                capability="literature:search",
+                access_level=state.get("access_profile", {}).get("level"),
+                node="search_papers",
+            )
+            return {
+                "papers": papers,
+                "searched_queries": [*searched_queries, *pending_queries],
+                "subtasks": [skipped.get(task.id, task) for task in state.get("subtasks", [])],
+                "errors": errors,
+            }
+
         def execute(task: ResearchSubtask) -> tuple[ResearchSubtask, list[Paper]]:
             """Run one isolated search subtask and return its auditable outcome."""
 
@@ -287,11 +315,23 @@ class ResearchGraphBuilder:
         }
 
     def index_papers(self, state: ResearchState) -> dict[str, Any]:
-        """LangGraph node: index retrieved paper abstracts in the vector store."""
+        """LangGraph node: index durable local records together with newly discovered papers."""
 
         self.check_cancelled()
-        indexed_count = self.vector_store.index_papers(state.get("papers", []))
-        return {"indexed_paper_count": indexed_count}
+        local_papers = self.local_corpus.papers() if access_allows(state, "rag:read") else []
+        papers = deduplicate_papers([*local_papers, *state.get("papers", [])])
+        indexed_count = self.vector_store.index_papers(papers)
+        log_event(
+            "rag.corpus_indexed",
+            local_document_count=len(local_papers),
+            discovered_document_count=len(state.get("papers", [])),
+            indexed_document_count=indexed_count,
+        )
+        return {
+            "papers": papers,
+            "indexed_paper_count": indexed_count,
+            "local_corpus_paper_count": len(local_papers),
+        }
 
     def retrieve_relevant_papers(self, state: ResearchState) -> dict[str, Any]:
         """LangGraph node: retrieve the most relevant evidence passages."""
@@ -476,6 +516,20 @@ class ResearchGraphBuilder:
         """LangGraph node: acquire selected papers and extract focused evidence."""
 
         self.check_cancelled()
+        if not access_allows(state, "fulltext:read"):
+            log_event(
+                "authorization.denied",
+                capability="fulltext:read",
+                access_level=state.get("access_profile", {}).get("level"),
+                node="deep_read_papers",
+            )
+            return {
+                "fulltext_attempted": False,
+                "evidence_notes": [
+                    *state.get("evidence_notes", []),
+                    "Full-text acquisition is not permitted by the selected authorization tier.",
+                ],
+            }
         documents = []
         readings = []
         fulltext_passages: list[EvidencePassage] = []
@@ -748,6 +802,16 @@ def extract_question_concepts(question: str) -> list[str]:
     }
     tokens = re.findall(r"[a-z0-9]+", question.lower())
     return list(dict.fromkeys(token for token in tokens if token not in stopwords and len(token) > 2))
+
+
+def access_allows(state: ResearchState, capability: str) -> bool:
+    """Check a server-resolved capability stored in checkpoint-safe graph state."""
+
+    profile = state.get("access_profile")
+    if profile is None:
+        return True
+    capabilities = profile.get("capabilities", []) if isinstance(profile, dict) else []
+    return capability in capabilities
 
 
 def concept_is_covered(concept: str, evidence_text: str) -> bool:

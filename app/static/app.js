@@ -1,4 +1,4 @@
-const state = { result: null, experiment: null, activeEvidence: null, reviewThread: null, review: null, requestController: null, stopRequested: false };
+const state = { result: null, experiment: null, activeEvidence: null, reviewThread: null, review: null, requestController: null, stopRequested: false, liveTrace: null, traceCursor: 0, traceTimer: null, tracePolling: false, projects: [], chats: [], activeProject: null, activeChat: null };
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const pipelineStages = [
@@ -14,7 +14,10 @@ document.addEventListener("DOMContentLoaded", () => {
   renderPipeline(-1);
   drawIdleMap();
   bindEvents();
+  renderAccessSummary();
   loadSystemStatus();
+  if (window.innerWidth > 1100) document.body.classList.add("memory-open");
+  loadWorkspaceMemory();
   if (window.lucide) window.lucide.createIcons();
 });
 
@@ -30,16 +33,21 @@ async function loadSystemStatus() {
 }
 
 function bindEvents() {
+  $("#memory-toggle").addEventListener("click", () => document.body.classList.toggle("memory-open"));
+  $("#new-project").addEventListener("click", () => { $("#project-create-form").classList.toggle("hidden"); $("#project-name").focus(); });
+  $("#project-create-form").addEventListener("submit", createProject);
+  $("#new-chat").addEventListener("click", createChat);
   $("#research-form").addEventListener("submit", runResearch);
+  $("#access-token").addEventListener("change", () => {
+    renderAccessSummary();
+    state.activeProject = null;
+    state.activeChat = null;
+    loadWorkspaceMemory();
+  });
   $("#stop-run").addEventListener("click", stopActiveResearch);
-  $$("[data-question]").forEach((button) => button.addEventListener("click", () => {
-    $("#question").value = button.dataset.question;
-    $("#question").focus();
-  }));
   $$("[data-tab]").forEach((button) => button.addEventListener("click", () => activateTab(button.dataset.tab)));
   $("#theme-toggle").addEventListener("click", toggleTheme);
   $("#copy-report").addEventListener("click", copyReport);
-  $("#experiment-demo").addEventListener("click", runExperimentDemo);
   $("#screening-form").addEventListener("submit", runCandidateScreen);
   $("#review-approve").addEventListener("click", () => submitReview({ action: "approve" }));
   $("#review-edit").addEventListener("click", submitReviewEdits);
@@ -51,6 +59,154 @@ function bindEvents() {
   });
   $("#review-dialog").addEventListener("cancel", (event) => event.preventDefault());
   window.addEventListener("resize", () => { state.result ? drawEvidenceMap() : drawIdleMap(); if (state.experiment) drawExperimentChart(); });
+}
+
+async function loadWorkspaceMemory() {
+  try {
+    const response = await memoryFetch("/api/projects");
+    if (!response.ok) throw new Error("Could not load projects");
+    state.projects = await response.json();
+    renderProjects();
+    const remembered = localStorage.getItem("research-project-id");
+    const project = state.projects.find((item) => item.id === remembered) || state.projects[0];
+    if (project) await selectProject(project.id, true);
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function createProject(event) {
+  event.preventDefault();
+  const name = $("#project-name").value.trim();
+  if (!name) return;
+  const response = await memoryFetch("/api/projects", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+  if (!response.ok) return showToast("Could not create project", true);
+  const project = await response.json();
+  $("#project-name").value = "";
+  $("#project-create-form").classList.add("hidden");
+  await loadWorkspaceMemory();
+  await selectProject(project.id, false);
+}
+
+async function selectProject(projectId, restoreChat = false) {
+  state.activeProject = state.projects.find((item) => item.id === projectId) || null;
+  if (!state.activeProject) return;
+  localStorage.setItem("research-project-id", projectId);
+  $("#active-project-name").textContent = state.activeProject.name;
+  renderProjects();
+  const response = await memoryFetch(`/api/projects/${encodeURIComponent(projectId)}/chats`);
+  state.chats = response.ok ? await response.json() : [];
+  renderChats();
+  const remembered = localStorage.getItem(`research-chat-${projectId}`);
+  const chat = restoreChat ? state.chats.find((item) => item.id === remembered) || state.chats[0] : null;
+  if (chat) await openChat(chat.id);
+  else if (!state.chats.length) await createChat();
+}
+
+async function createChat() {
+  if (!state.activeProject) return;
+  const response = await memoryFetch(`/api/projects/${encodeURIComponent(state.activeProject.id)}/chats`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "New chat" }) });
+  if (!response.ok) return showToast("Could not create chat", true);
+  const chat = await response.json();
+  const [listResponse, projectsResponse] = await Promise.all([
+    memoryFetch(`/api/projects/${encodeURIComponent(state.activeProject.id)}/chats`),
+    memoryFetch("/api/projects"),
+  ]);
+  state.chats = listResponse.ok ? await listResponse.json() : [chat, ...state.chats];
+  if (projectsResponse.ok) {
+    state.projects = await projectsResponse.json();
+    state.activeProject = state.projects.find((item) => item.id === state.activeProject.id) || state.activeProject;
+    renderProjects();
+  }
+  renderChats();
+  await openChat(chat.id);
+}
+
+async function ensureActiveChat() {
+  if (!state.activeProject) await loadWorkspaceMemory();
+  if (!state.activeChat) await createChat();
+  if (!state.activeProject || !state.activeChat) throw new Error("Select a project and chat first");
+}
+
+async function openChat(chatId) {
+  const response = await memoryFetch(`/api/chats/${encodeURIComponent(chatId)}`);
+  if (!response.ok) return showToast("Could not open chat", true);
+  state.activeChat = await response.json();
+  state.reviewThread = state.activeChat.active_thread_id || null;
+  localStorage.setItem(`research-chat-${state.activeChat.project_id}`, chatId);
+  renderChats();
+  renderConversation(state.activeChat);
+  const latestResult = [...state.activeChat.messages].reverse().find((message) => message.result)?.result;
+  if (latestResult) {
+    state.result = latestResult;
+    state.liveTrace = latestResult.run_trace || null;
+    renderResult(latestResult);
+    renderConversation(state.activeChat);
+  } else {
+    $("#workspace").classList.add("has-results");
+    $("#empty-state").classList.add("hidden");
+  }
+  activateTab("chat");
+  if (state.activeChat.status === "review_required" && state.activeChat.active_thread_id) {
+    restoreReviewSession(state.activeChat.active_thread_id);
+  }
+}
+
+async function restoreReviewSession(threadId) {
+  const response = await memoryFetch(`/api/research/sessions/${encodeURIComponent(threadId)}`);
+  if (!response.ok) return;
+  const payload = await response.json();
+  if (payload.status === "review_required") handleReviewSession(payload);
+}
+
+function renderProjects() {
+  $("#project-list").innerHTML = state.projects.map((project) => `<button class="project-row ${project.id === state.activeProject?.id ? "active" : ""}" type="button" data-project-id="${project.id}"><i data-lucide="folder"></i><span><strong>${escapeHtml(project.name)}</strong><small>${accessLevelLabel(project.minimum_access_level)} · ${project.chat_count || 0} chats · ${project.message_count || 0} messages</small></span></button>`).join("");
+  $$('[data-project-id]').forEach((button) => button.addEventListener("click", () => selectProject(button.dataset.projectId, true)));
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function renderChats() {
+  $("#chat-list").innerHTML = state.chats.map((chat) => `<button class="chat-row ${chat.id === state.activeChat?.id ? "active" : ""}" type="button" data-chat-id="${chat.id}"><i data-lucide="message-square"></i><span><strong>${escapeHtml(chat.title)}</strong><small>${accessLevelLabel(chat.minimum_access_level)} · ${escapeHtml(chat.status)} · ${chat.message_count || 0} messages</small></span></button>`).join("") || '<p class="telemetry-empty">No chats available at this access level.</p>';
+  $$('[data-chat-id]').forEach((button) => button.addEventListener("click", () => openChat(button.dataset.chatId)));
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function renderConversation(chat) {
+  $("#chat-panel-title").textContent = chat.title;
+  $("#chat-status").textContent = chat.status === "review_required" ? "Paused for review" : "Saved locally";
+  $("#conversation").innerHTML = chat.messages.map((message) => `<article class="message ${message.role}"><header><strong>${message.role === "user" ? "Question" : "Research response"}</strong><time>${formatMemoryTime(message.created_at)}</time></header><p>${escapeHtml(message.content)}</p>${message.result ? `<button class="message-result-button" type="button" data-result-message="${message.id}"><i data-lucide="file-search"></i>Open full result</button>` : ""}</article>`).join("") || '<p class="telemetry-empty">Ask a question to begin this chat.</p>';
+  $$('[data-result-message]').forEach((button) => button.addEventListener("click", () => {
+    const message = chat.messages.find((item) => item.id === button.dataset.resultMessage);
+    if (!message?.result) return;
+    state.result = message.result;
+    renderResult(message.result);
+    activateTab("report");
+  }));
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function formatMemoryTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function accessLevelLabel(level) {
+  return ({ local_reader: "Local", researcher: "Researcher", principal_investigator: "PI" })[level] || "Local";
+}
+
+async function refreshWorkspaceMemory() {
+  if (!state.activeProject || !state.activeChat) return;
+  const [projectsResponse, chatsResponse, chatResponse] = await Promise.all([
+    memoryFetch("/api/projects"),
+    memoryFetch(`/api/projects/${encodeURIComponent(state.activeProject.id)}/chats`),
+    memoryFetch(`/api/chats/${encodeURIComponent(state.activeChat.id)}`),
+  ]);
+  if (projectsResponse.ok) state.projects = await projectsResponse.json();
+  if (chatsResponse.ok) state.chats = await chatsResponse.json();
+  if (chatResponse.ok) state.activeChat = await chatResponse.json();
+  renderProjects();
+  renderChats();
+  renderConversation(state.activeChat);
 }
 
 async function runCandidateScreen(event) {
@@ -66,7 +222,7 @@ async function runCandidateScreen(event) {
   const button = $("#screening-form .screen-button");
   button.disabled = true;
   try {
-    const response = await fetch("/api/materials/screen", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) });
+    const response = await fetch("/api/materials/screen", { method: "POST", headers: { "Content-Type": "application/json", "X-Simulated-Authorization": selectedAccessToken() }, body: JSON.stringify(request) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.detail?.[0]?.msg || result.detail || "Screening failed");
     $("#screen-match-count").textContent = result.matched_count.toLocaleString();
@@ -81,39 +237,26 @@ async function runCandidateScreen(event) {
   }
 }
 
-async function runExperimentDemo() {
-  const button = $("#experiment-demo");
-  button.disabled = true;
-  try {
-    const response = await fetch("/api/demo/experiment");
-    if (!response.ok) throw new Error("Local experiment demo failed");
-    state.experiment = await response.json();
-    renderExperiment(state.experiment);
-    $("#workspace").classList.add("has-results");
-    $("#empty-state").classList.add("hidden");
-    activateTab("experiment");
-    showToast("Synthetic experiment generated locally");
-  } catch (error) {
-    showToast(error.message, true);
-  } finally {
-    button.disabled = false;
-  }
-}
-
 async function runResearch(event) {
   event.preventDefault();
   const question = $("#question").value.trim();
   if (question.length < 8) return;
+  try {
+    await ensureActiveChat();
+  } catch (error) {
+    return showToast(error.message, true);
+  }
   state.reviewThread = crypto.randomUUID().replaceAll("-", "");
   state.stopRequested = false;
   state.requestController = new AbortController();
   setLoading(true);
-  animatePipeline();
+  startLiveTracePolling(true);
+  renderPipeline(0);
   try {
     const response = await fetch("/api/research/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, thread_id: state.reviewThread }),
+      body: JSON.stringify({ question, thread_id: state.reviewThread, access_token: selectedAccessToken(), project_id: state.activeProject.id, chat_id: state.activeChat.id }),
       signal: state.requestController.signal,
     });
     const payload = await response.json();
@@ -134,13 +277,13 @@ async function stopActiveResearch() {
   state.requestController?.abort();
   const threadId = state.reviewThread;
   setGenerationActive(false);
-  clearInterval(window.pipelineTimer);
+  stopLiveTracePolling("cancelling");
   renderPipeline(-1);
   $("#run-id").textContent = "STOPPED";
   if ($("#review-dialog").open) $("#review-dialog").close();
   showToast("Stop requested. No further workflow steps will start.");
   try {
-    await fetch(`/api/research/sessions/${encodeURIComponent(threadId)}/cancel`, {
+    await memoryFetch(`/api/research/sessions/${encodeURIComponent(threadId)}/cancel`, {
       method: "POST",
       keepalive: true,
     });
@@ -152,16 +295,23 @@ async function stopActiveResearch() {
 function handleReviewSession(payload) {
   if (state.stopRequested) return;
   state.reviewThread = payload.thread_id;
+  if (payload.project_id && state.activeProject?.id !== payload.project_id) {
+    state.activeProject = state.projects.find((item) => item.id === payload.project_id) || state.activeProject;
+  }
   if (payload.status === "review_required" && payload.review) {
+    stopLiveTracePolling("review_required");
     state.review = payload.review;
     renderReview(payload.review);
     setLoading(false);
+    refreshWorkspaceMemory();
     return;
   }
   state.review = null;
+  stopLiveTracePolling(payload.status || "completed");
   state.result = payload.state;
   if ($("#review-dialog").open) $("#review-dialog").close();
   renderResult(payload.state);
+  refreshWorkspaceMemory();
   setLoading(false);
   showToast(payload.state.cancelled ? "Research stopped" : "Research run complete");
 }
@@ -182,7 +332,6 @@ function renderReview(review) {
   $("#review-skip").classList.toggle("hidden", isSearch);
   $("#review-edit").innerHTML = isSearch ? '<i data-lucide="pencil"></i>Apply query edits' : '<i data-lucide="list-checks"></i>Use selection';
   $("#run-id").textContent = `REVIEW-${state.reviewThread.slice(0, 6).toUpperCase()}`;
-  clearInterval(window.pipelineTimer);
   if (!$("#review-dialog").open) $("#review-dialog").showModal();
   if (window.lucide) window.lucide.createIcons();
 }
@@ -206,15 +355,19 @@ function submitReviewInstruction() {
 
 async function submitReview(decision) {
   if (!state.reviewThread) return;
+  const pendingReview = state.review;
   setReviewBusy(true);
+  if ($("#review-dialog").open) $("#review-dialog").close();
   state.stopRequested = false;
   state.requestController = new AbortController();
   setGenerationActive(true);
-  animatePipeline();
+  startLiveTracePolling(false);
+  renderPipelineFromTrace(state.liveTrace?.events || []);
+  showToast(decision.action === "stop" ? "Stopping research…" : "Research resumed");
   try {
-    const response = await fetch(`/api/research/sessions/${encodeURIComponent(state.reviewThread)}/resume`, {
+    const response = await memoryFetch(`/api/research/sessions/${encodeURIComponent(state.reviewThread)}/resume`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "X-Simulated-Authorization": selectedAccessToken() },
       body: JSON.stringify(decision),
       signal: state.requestController.signal,
     });
@@ -222,8 +375,10 @@ async function submitReview(decision) {
     if (!response.ok) throw new Error(payload.detail || "Could not resume research");
     handleReviewSession(payload);
   } catch (error) {
-    clearInterval(window.pipelineTimer);
-    if (error.name !== "AbortError") showToast(error.message, true);
+    if (error.name !== "AbortError") {
+      showToast(error.message, true);
+      if (pendingReview && !state.stopRequested) renderReview(pendingReview);
+    }
   } finally {
     state.requestController = null;
     setGenerationActive(false);
@@ -243,9 +398,77 @@ function setLoading(loading) {
   button.querySelector("span").textContent = loading ? "Researching…" : "Run research";
   if (loading) {
     $("#run-id").textContent = "RUNNING";
-    $("#workspace").classList.remove("has-results");
-    $("#empty-state").classList.remove("hidden");
   }
+}
+
+function startLiveTracePolling(reset) {
+  if (reset) {
+    state.liveTrace = { events: [], metrics: {} };
+    state.traceCursor = 0;
+    $("#trace-list").innerHTML = '<p class="telemetry-empty">Waiting for the first workflow event…</p>';
+    renderLocalTelemetry(null);
+  }
+  clearInterval(state.traceTimer);
+  $("#workspace").classList.add("has-results");
+  $("#empty-state").classList.add("hidden");
+  $("#trace-badge").textContent = "Live";
+  $("#trace-badge").classList.add("is-live");
+  activateTab("trace");
+  pollLiveTrace();
+  state.traceTimer = setInterval(pollLiveTrace, 600);
+}
+
+function stopLiveTracePolling(status) {
+  clearInterval(state.traceTimer);
+  state.traceTimer = null;
+  const live = status === "running" || status === "cancelling";
+  $("#trace-badge").textContent = status === "review_required" ? "Paused for review" : live ? "Stopping" : "Stored locally";
+  $("#trace-badge").classList.toggle("is-live", live);
+  pollLiveTrace();
+}
+
+async function pollLiveTrace() {
+  if (!state.reviewThread || state.tracePolling) return;
+  state.tracePolling = true;
+  try {
+    const response = await memoryFetch(`/api/research/sessions/${encodeURIComponent(state.reviewThread)}/trace?after=${state.traceCursor}`);
+    if (!response.ok) return;
+    const update = await response.json();
+    const events = [...(state.liveTrace?.events || []), ...(update.events || [])];
+    state.traceCursor = update.event_count || events.length;
+    state.liveTrace = { ...update, events, metrics: update.metrics || state.liveTrace?.metrics || {} };
+    renderLiveWorkflow(events);
+    renderPipelineFromTrace(events);
+    renderLocalTelemetry(state.liveTrace, state.liveTrace.metrics);
+    if (["completed", "cancelled", "failed"].includes(update.status)) {
+      clearInterval(state.traceTimer);
+      state.traceTimer = null;
+      $("#trace-badge").textContent = "Stored locally";
+      $("#trace-badge").classList.remove("is-live");
+    }
+  } catch {
+    // Polling is best-effort and the next interval retries automatically.
+  } finally {
+    state.tracePolling = false;
+  }
+}
+
+function renderLiveWorkflow(events) {
+  const operations = new Map();
+  events.forEach((event) => {
+    if (event.event === "operation.started") {
+      operations.set(event.span_id, { ...event, status: "running" });
+    } else if (event.event.startsWith("operation.")) {
+      const prior = operations.get(event.span_id) || event;
+      operations.set(event.span_id, { ...prior, ...event, status: event.status || event.event.replace("operation.", "") });
+    }
+  });
+  const visible = [...operations.values()].slice(-12);
+  $("#trace-list").innerHTML = visible.map((item) => {
+    const name = String(item.name || item.operation || "workflow operation").replace(/^langgraph\.(node|route)\./, "").replaceAll("_", " ");
+    const duration = item.duration_ms !== undefined ? `${Math.round(item.duration_ms)} ms` : "in progress";
+    return `<div class="trace-item"><time>${escapeHtml(item.kind || "operation")}</time><span class="trace-node ${item.status === "running" ? "running" : ""}"></span><div><h3>${escapeHtml(name)}</h3><p>${escapeHtml(duration)}</p></div><span class="trace-status">${escapeHtml(item.status)}</span></div>`;
+  }).join("") || '<p class="telemetry-empty">Waiting for the first workflow event…</p>';
 }
 
 function setGenerationActive(active) {
@@ -253,26 +476,69 @@ function setGenerationActive(active) {
   $("#stop-run").classList.toggle("hidden", !active);
 }
 
-function animatePipeline() {
-  let index = 0;
-  renderPipeline(index);
-  clearInterval(window.pipelineTimer);
-  window.pipelineTimer = setInterval(() => {
-    index = Math.min(index + 1, pipelineStages.length - 1);
-    renderPipeline(index);
-  }, 1200);
+function selectedAccessToken() {
+  return $("#access-token").value;
+}
+
+function memoryFetch(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  headers.set("X-Simulated-Authorization", selectedAccessToken());
+  return fetch(url, { ...options, headers });
+}
+
+function renderAccessSummary() {
+  const descriptions = {
+    "sim-local-reader": "Local Reader · embedded literature RAG only",
+    "sim-researcher": "Researcher · local RAG + OpenAlex + materials DB",
+    "sim-principal-investigator": "Principal Investigator · local RAG + OpenAlex + full text",
+  };
+  $("#access-summary").textContent = descriptions[selectedAccessToken()];
+  if (!$('.run-button').disabled) renderPipeline(-1);
 }
 
 function renderPipeline(activeIndex, completed = false) {
+  const statuses = pipelineStages.map((_, index) => completed ? "done" : index === activeIndex ? "active" : index < activeIndex ? "done" : "pending");
+  renderPipelineStatuses(statuses);
+}
+
+function renderPipelineFromTrace(events) {
+  const stageByOperation = [
+    [/langgraph\.node\.plan_research|llm\.research_planning/, 0],
+    [/langgraph\.node\.search_papers|subtask\.literature_search|mcp\.client\.search_papers/, 1],
+    [/langgraph\.node\.(index_papers|retrieve_relevant_papers|evaluate_evidence)|rag\.retrieve_for_intent/, 2],
+    [/langgraph\.node\.(review_deep_read|deep_read_papers)|subtask\.deep_read|mcp\.client\.get_full_text/, 3],
+    [/langgraph\.node\.(prepare_context|write_answer)|llm\.answer_synthesis/, 4],
+    [/langgraph\.node\.(verify_grounding|validate_answer)|llm\.grounding/, 5],
+  ];
+  const statuses = pipelineStages.map(() => "pending");
+  events.forEach((event) => {
+    if (!event.event?.startsWith("operation.")) return;
+    const name = String(event.name || event.operation || "");
+    const match = stageByOperation.find(([pattern]) => pattern.test(name));
+    if (!match) return;
+    const stage = match[1];
+    if (event.event === "operation.started" && statuses[stage] !== "done") statuses[stage] = "active";
+    if (event.event === "operation.completed") statuses[stage] = "done";
+    if (event.event === "operation.failed") statuses[stage] = "failed";
+  });
+  if (statuses[3] === "pending" && statuses.slice(4).some((status) => status !== "pending")) {
+    statuses[3] = "skipped";
+  }
+  renderPipelineStatuses(statuses);
+}
+
+function renderPipelineStatuses(statuses) {
   $("#pipeline").innerHTML = pipelineStages.map(([name, detail], index) => {
-    const mode = completed || index < activeIndex ? "done" : index === activeIndex ? "active" : "";
+    if (name === "Search literature" && selectedAccessToken() === "sim-local-reader") detail = "Embedded corpus only";
+    const mode = statuses[index] === "pending" ? "" : statuses[index];
     return `<div class="pipeline-step ${mode}">${escapeHtml(name)}<small>${escapeHtml(detail)}</small></div>`;
   }).join("");
 }
 
 function renderResult(result) {
-  clearInterval(window.pipelineTimer);
-  renderPipeline(-1, true);
+  const traceEvents = state.liveTrace?.events || result.run_trace?.events || [];
+  if (traceEvents.length) renderPipelineFromTrace(traceEvents);
+  else renderPipeline(-1, true);
   $("#workspace").classList.add("has-results");
   $("#empty-state").classList.add("hidden");
   $("#run-id").textContent = `RUN-${Date.now().toString().slice(-6)}`;
@@ -284,6 +550,8 @@ function renderResult(result) {
   $("#goal-percent").textContent = `${progress}%`;
   $("#goal-progress").style.width = `${progress}%`;
   $("#goal-objective").textContent = result.goal?.objective || result.question;
+  const profile = result.access_profile;
+  if (profile) $("#access-summary").textContent = `${profile.label} · ${result.local_corpus_paper_count || 0} local corpus papers indexed`;
   renderReport(result.answer || "No answer generated.");
   renderEvidence(result.retrieved_passages || []);
   renderPapers(result.retrieved_papers || result.papers || []);

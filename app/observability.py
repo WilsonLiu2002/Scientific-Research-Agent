@@ -19,6 +19,7 @@ _run_id = contextvars.ContextVar("research_run_id", default=None)
 _trace_id = contextvars.ContextVar("research_trace_id", default=None)
 _span_id = contextvars.ContextVar("research_span_id", default=None)
 _collector = contextvars.ContextVar("research_metrics", default=None)
+_event_sink = contextvars.ContextVar("research_event_sink", default=None)
 _configured = False
 _T = TypeVar("_T")
 SECRET_FRAGMENTS = ("api_key", "authorization", "credential", "password", "secret", "token")
@@ -137,16 +138,26 @@ class RunContext:
 
 
 @contextlib.contextmanager
-def research_run(run_id: str | None = None, trace_id: str | None = None) -> Iterator[RunContext]:
+def research_run(
+    run_id: str | None = None,
+    trace_id: str | None = None,
+    event_sink: Callable[[dict[str, Any]], None] | None = None,
+) -> Iterator[RunContext]:
     """Establish root correlation context shared by sync, async, and nested operations."""
 
     configure_observability()
     context = RunContext(run_id or uuid.uuid4().hex, trace_id or uuid.uuid4().hex, RunMetrics())
-    tokens = (_run_id.set(context.run_id), _trace_id.set(context.trace_id), _collector.set(context.metrics))
+    tokens = (
+        _run_id.set(context.run_id),
+        _trace_id.set(context.trace_id),
+        _collector.set(context.metrics),
+        _event_sink.set(event_sink),
+    )
     try:
         with span("research.run", kind="chain", export=True):
             yield context
     finally:
+        _event_sink.reset(tokens[3])
         _collector.reset(tokens[2])
         _trace_id.reset(tokens[1])
         _run_id.reset(tokens[0])
@@ -278,18 +289,23 @@ def log_event(event: str, severity: int = logging.INFO, **fields: Any) -> None:
     safe_fields = redact(fields)
     timestamp = utc_timestamp()
     collector = _collector.get()
+    trace_event = {
+        "timestamp": timestamp,
+        "severity": logging.getLevelName(severity),
+        "event": event,
+        "run_id": _run_id.get(),
+        "trace_id": _trace_id.get(),
+        "span_id": _span_id.get(),
+        **safe_fields,
+    }
     if collector:
-        collector.record_event(
-            {
-                "timestamp": timestamp,
-                "severity": logging.getLevelName(severity),
-                "event": event,
-                "run_id": _run_id.get(),
-                "trace_id": _trace_id.get(),
-                "span_id": _span_id.get(),
-                **safe_fields,
-            }
-        )
+        collector.record_event(trace_event)
+    sink = _event_sink.get()
+    if sink:
+        try:
+            sink(trace_event)
+        except Exception:
+            logging.getLogger("scientific_agent").debug("live_trace.sink_failed")
     logging.getLogger("scientific_agent").log(
         severity,
         event,

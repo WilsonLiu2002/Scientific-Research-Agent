@@ -57,21 +57,66 @@ is the fastest way to understand how a question becomes a grounded answer.
 ### Research workflow
 
 ```mermaid
-flowchart LR
-    Q[Question] --> PLAN[Plan and review]
-    PLAN --> SEARCH[Search and index]
-    SEARCH --> RAG[Retrieve and evaluate]
-    RAG --> CRITIC{Evidence sufficient?}
-    CRITIC -->|No| PLAN
-    CRITIC -->|Needs detail| READ[Review and read full text]
-    CRITIC -->|Yes| ANSWER[Synthesize answer]
-    READ --> ANSWER
-    ANSWER --> VERIFY[Verify grounding]
-    VERIFY --> DONE[Saved result]
+flowchart TB
+    Q[Research question] --> AUTH[Resolve user capabilities]
+
+    subgraph PLAN_STAGE[1. Understand and plan]
+        AUTH --> MEMORY[Load bounded chat and project memory]
+        MEMORY --> INTENT[Extract purpose, entities, constraints, and evidence needs]
+        INTENT --> QUERIES[Generate diverse search queries and subtasks]
+        QUERIES --> SEARCH_REVIEW{Human search review}
+    end
+
+    SEARCH_REVIEW -->|Stop| PAUSED[(Durable checkpoint)]
+    SEARCH_REVIEW -->|Edit or approve| DISPATCH[Dispatch authorized subtasks]
+
+    subgraph DISCOVERY[2. Discover and index evidence]
+        DISPATCH --> LOCAL[Versioned local literature corpus]
+        DISPATCH -->|If authorized| MCP_SEARCH[MCP OpenAlex search]
+        DISPATCH -->|Property question| MATERIALS[MCP materials screening]
+        LOCAL --> MERGE[Merge and DOI-aware deduplication]
+        MCP_SEARCH --> MERGE
+        MATERIALS --> MERGE
+        MERGE --> INDEX[Chunk, embed, and update Chroma index]
+    end
+
+    subgraph RETRIEVAL[3. Retrieve and assess]
+        INDEX --> PROBES[Build purpose-aware retrieval probes]
+        PROBES --> HYBRID[Hybrid semantic and lexical retrieval]
+        HYBRID --> SELECT[Deduplicate, diversify, and budget context]
+        SELECT --> EVALUATE[Measure coverage and evidence quality]
+        EVALUATE --> CRITIC{Bounded research critic}
+    end
+
+    CRITIC -->|Missing evidence| REFINE[Generate follow-up queries]
+    REFINE --> SEARCH_REVIEW
+    CRITIC -->|Needs article detail| READ_REVIEW{Human full-text review}
+    READ_REVIEW -->|Stop| PAUSED
+    READ_REVIEW -->|Skip| CONTEXT
+    READ_REVIEW -->|Approve| FULLTEXT[MCP open-access acquisition]
+    FULLTEXT --> EXTRACT[Parse and extract relevant passages]
+    EXTRACT --> SELECT
+
+    subgraph SYNTHESIS[4. Synthesize and verify]
+        CRITIC -->|Sufficient| CONTEXT[Prepare evidence-bounded context]
+        CONTEXT --> ANSWER[Write answer with passage citations]
+        ANSWER --> VERIFY[Verify claim-to-evidence grounding]
+        VERIFY -->|One repair allowed| ANSWER
+        VERIFY --> VALIDATE[Validate citation integrity]
+    end
+
+    VALIDATE --> SAVE[(Save messages, result, and checkpoint)]
+    SAVE --> UI[Report, evidence map, papers, and live trace]
+
+    TRACE[Structured logs, nested spans, and run metrics] -. observes .-> INTENT
+    TRACE -. observes .-> DISPATCH
+    TRACE -. observes .-> HYBRID
+    TRACE -. observes .-> ANSWER
 ```
 
-Human review can edit, approve, skip, or stop work before external search and
-full-text acquisition. Stops and interruptions are durable checkpoints.
+Search and reading subtasks can execute concurrently, while the critic keeps retries
+bounded. Memory informs intent but never becomes evidence; only retrieved passages
+enter the synthesis context. Human stops and interruptions are durable checkpoints.
 
 ### System architecture
 

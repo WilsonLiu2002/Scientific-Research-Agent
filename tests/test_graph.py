@@ -5,7 +5,7 @@ import pytest
 
 from app.graph import ResearchGraphBuilder, ResearchRunCancelled, build_research_graph
 from app.checkpointing import create_durable_checkpointer
-from app.models import DocumentSection, FullTextDocument, Paper
+from app.models import CitationExpansionResult, DocumentSection, FullTextDocument, Paper, PaperIntegrityResult
 from app.rag import create_vector_store
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -470,3 +470,55 @@ def test_graph_supports_async_invocation() -> None:
 
     assert result["goal"].status == "completed"
     assert result["answer"]
+
+
+class DiscoveryTrustClient(FakeSearchClient):
+    """Provide deterministic integrity and citation results for graph routing tests."""
+
+    def check_research_integrity(self, doi: str) -> PaperIntegrityResult:
+        status = "retracted" if doi.endswith("bad") else "clear"
+        return PaperIntegrityResult(doi=doi, status=status)
+
+    def expand_citation_graph(self, paper: Paper, limit: int = 5) -> CitationExpansionResult:
+        discovered = Paper(
+            id="citation-1", title="Citation graph result", abstract="Additional relevant evidence.",
+            doi="10.1000/good", source="semantic-scholar-citation", discovered_from=paper.id,
+        )
+        return CitationExpansionResult(seed_paper_id=paper.id, papers=[discovered], citations_found=1)
+
+
+def test_integrity_check_excludes_retracted_papers_from_index() -> None:
+    builder = ResearchGraphBuilder(
+        search_client=DiscoveryTrustClient(), vector_store=create_vector_store(force_memory=True)
+    )
+    state = {
+        "question": "test",
+        "papers": [
+            Paper(id="bad", title="Retracted", abstract="Do not use.", doi="10.1000/bad", source="test"),
+            Paper(id="good", title="Valid", abstract="Usable evidence.", doi="10.1000/good", source="test"),
+        ],
+        "errors": [],
+        "access_profile": {"capabilities": ["rag:read", "literature:search"]},
+    }
+    state.update(builder.check_paper_integrity(state))
+    state.update(builder.index_papers(state))
+    passages = builder.vector_store.retrieve("Do not use", top_k=20)
+
+    assert state["retracted_paper_count"] == 1
+    assert all(passage.paper.id != "bad" for passage in passages)
+
+
+def test_weak_evidence_routes_to_one_bounded_citation_expansion() -> None:
+    builder = ResearchGraphBuilder(search_client=DiscoveryTrustClient())
+    seed = Paper(id="seed", title="Seed", abstract="Initial evidence.", source="test")
+    state = {
+        "papers": [seed], "retrieved_papers": [seed], "errors": [],
+        "evidence_sufficient": False, "citation_expansion_attempted": False,
+        "access_profile": {"capabilities": ["literature:search"]},
+    }
+
+    assert builder.route_after_evaluation(state) == "expand_citation_graph"
+    state.update(builder.expand_citation_graph(state))
+    assert state["citation_expansion_attempted"] is True
+    assert state["citation_expansion_count"] == 1
+    assert builder.route_after_evaluation(state) == "critique_research"

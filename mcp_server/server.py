@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from mcp_server.fulltext import FullTextService
 from mcp_server.openalex import OpenAlexSearchClient
+from mcp_server.crossref import CrossrefIntegrityClient
+from mcp_server.citations import SemanticScholarCitationClient
+from app.models import Paper
 from app.materials_ml import CandidateScreenRequest, MaterialsScreeningTool
 from app.auth import default_access_grant, resolve_access_token
 from app.observability import log_event, span
@@ -18,6 +21,8 @@ except (ImportError, ModuleNotFoundError):
 search_client = OpenAlexSearchClient()
 fulltext_service = FullTextService()
 materials_tool = MaterialsScreeningTool()
+integrity_client = CrossrefIntegrityClient()
+citation_client = SemanticScholarCitationClient()
 mcp = FastMCP("academic-search", log_level="ERROR") if FastMCP else None
 
 
@@ -68,6 +73,52 @@ async def get_full_text(
         return document.model_dump() if document else None
 
 
+async def check_research_integrity(
+    doi: str,
+    correlation_run_id: str | None = None,
+    correlation_trace_id: str | None = None,
+    correlation_parent_span_id: str | None = None,
+    simulated_auth_token: str | None = None,
+) -> dict:
+    """MCP tool that checks Crossref for retractions and other publication updates."""
+
+    grant = resolve_access_token(simulated_auth_token) if simulated_auth_token else default_access_grant()
+    if not grant.allows("literature:search"):
+        raise PermissionError("Token does not permit research-integrity lookup")
+    with span("mcp.server.check_research_integrity", kind="tool", export=False, fields={"tool": "check_research_integrity", "correlation_run_id": correlation_run_id, "correlation_trace_id": correlation_trace_id, "correlation_parent_span_id": correlation_parent_span_id, "access_level": grant.level}):
+        try:
+            result = await integrity_client.check(doi)
+        except Exception as exc:
+            log_event("mcp.provider_failed", tool="check_research_integrity", failure_type=type(exc).__name__)
+            raise
+        log_event("mcp.provider_result", tool="check_research_integrity", result_count=1, provider_status="ok", integrity_status=result.status)
+        return result.model_dump()
+
+
+async def expand_citation_graph(
+    paper: dict,
+    limit: int = 5,
+    correlation_run_id: str | None = None,
+    correlation_trace_id: str | None = None,
+    correlation_parent_span_id: str | None = None,
+    simulated_auth_token: str | None = None,
+) -> dict:
+    """MCP tool that discovers bounded references and citations around one seed paper."""
+
+    grant = resolve_access_token(simulated_auth_token) if simulated_auth_token else default_access_grant()
+    if not grant.allows("literature:search"):
+        raise PermissionError("Token does not permit citation-graph expansion")
+    seed = Paper.model_validate(paper)
+    with span("mcp.server.expand_citation_graph", kind="tool", export=False, fields={"tool": "expand_citation_graph", "correlation_run_id": correlation_run_id, "correlation_trace_id": correlation_trace_id, "correlation_parent_span_id": correlation_parent_span_id, "access_level": grant.level}):
+        try:
+            result = await citation_client.expand(seed, limit=min(max(limit, 1), 20))
+        except Exception as exc:
+            log_event("mcp.provider_failed", tool="expand_citation_graph", failure_type=type(exc).__name__)
+            raise
+        log_event("mcp.provider_result", tool="expand_citation_graph", result_count=len(result.papers), provider_status="ok")
+        return result.model_dump()
+
+
 async def screen_material_candidates(
     min_band_gap_ev: float = 1.0,
     max_band_gap_ev: float = 2.5,
@@ -101,6 +152,8 @@ if mcp is not None:
     mcp.tool()(search_papers)
     mcp.tool()(get_full_text)
     mcp.tool()(screen_material_candidates)
+    mcp.tool()(check_research_integrity)
+    mcp.tool()(expand_citation_graph)
 
 
 def main() -> None:

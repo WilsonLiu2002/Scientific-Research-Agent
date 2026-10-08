@@ -18,6 +18,11 @@ class Paper(BaseModel):
     url: str | None = None
     citation_count: int | None = None
     source: str
+    discovered_from: str | None = None
+    integrity_status: Literal[
+        "unchecked", "clear", "corrected", "expression_of_concern", "retracted", "unknown"
+    ] = "unchecked"
+    integrity_updates: list[str] = Field(default_factory=list)
 
     @field_validator("id", "title", "source")
     @classmethod
@@ -57,6 +62,48 @@ class Paper(BaseModel):
         if self.id:
             return self.id.lower()
         return normalize_title(self.title)
+
+
+class PaperIntegrityResult(BaseModel):
+    """Normalized scholarly-record status returned by the Crossref MCP tool."""
+
+    doi: str
+    status: Literal["clear", "corrected", "expression_of_concern", "retracted", "unknown"]
+    updates: list[str] = Field(default_factory=list)
+    checked_source: str = "crossref"
+
+
+class CitationExpansionResult(BaseModel):
+    """Bounded papers discovered around one seed through a citation graph."""
+
+    seed_paper_id: str
+    papers: list[Paper] = Field(default_factory=list)
+    references_found: int = 0
+    citations_found: int = 0
+
+
+class ToolChoice(BaseModel):
+    """One capability-aware tool decision recorded before execution."""
+
+    tool_id: Literal[
+        "local_rag", "search_papers", "check_research_integrity",
+        "expand_citation_graph", "get_full_text", "screen_material_candidates",
+    ]
+    selected: bool
+    reason: str
+    stage: Literal["discovery", "retrieval", "deep_read"]
+    required_capability: str
+
+
+class ToolPlan(BaseModel):
+    """Auditable per-run tool portfolio produced from intent and authorization."""
+
+    choices: list[ToolChoice]
+
+    def selected_ids(self) -> set[str]:
+        """Return selected tool identifiers for graph routing."""
+
+        return {choice.tool_id for choice in self.choices if choice.selected}
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> "Paper":

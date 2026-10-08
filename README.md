@@ -1,6 +1,6 @@
 # Scientific Literature Research Agent
 
-A working Python research-agent MVP for materials-science literature questions. It retrieves from a durable local corpus, optionally expands discovery through OpenAlex, ranks evidence passages, deep-reads authorized open-access articles, and produces an answer with validated citations.
+A working Python research-agent MVP for materials-science literature questions. It dynamically selects authorized tools, retrieves from a durable local corpus, expands discovery through OpenAlex and citation graphs when needed, checks publication integrity, deep-reads authorized open-access articles, and produces an answer with validated citations.
 
 This repository is intentionally small and inspectable. It includes a CLI, Python library, and local browser workbench; it is not a hosted multi-user service.
 
@@ -9,11 +9,14 @@ This repository is intentionally small and inspectable. It includes a CLI, Pytho
 Implemented and tested:
 
 - LangGraph workflow orchestration with conditional research loops
+- Capability-aware dynamic tool selection with per-tool reasons and trace visibility
 - Bounded critic reflection with typed retry, deep-read, sufficient, and stop decisions
 - Explicit research goals, progress, and typed subtasks
 - Bounded concurrent search and full-text work
-- Exclusive MCP boundary for literature search and full-text acquisition
+- Exclusive MCP boundary for external search, integrity, citation, full-text, and materials tools
 - OpenAlex metadata and abstract search
+- Crossref retraction, correction, and expression-of-concern checks
+- Bounded Semantic Scholar reference and citation expansion when evidence is weak
 - DOI-aware paper deduplication
 - Passage-level hybrid retrieval with Chroma or an in-memory fallback
 - Versioned local literature corpus and persistent embedded Chroma index
@@ -37,7 +40,7 @@ Implemented and tested:
 - Bounded chat/project continuity context for intent and query planning
 - Server-enforced hierarchical access control for projects, chats, runs, and checkpoints
 - Offline evaluation with distractors, retrieval metrics, grounding checks, and quality gates
-- 75 automated tests
+- 83 automated tests
 
 Not implemented:
 
@@ -62,9 +65,9 @@ flowchart TB
 
     subgraph PLAN_STAGE[1. Understand and plan]
         AUTH --> MEMORY[Load bounded chat and project memory]
-        MEMORY --> INTENT[Extract purpose, entities, constraints, and evidence needs]
-        INTENT --> QUERIES[Generate diverse search queries and subtasks]
-        QUERIES --> SEARCH_REVIEW{Human search review}
+        MEMORY --> PLAN[Extract intent and generate diverse queries]
+        PLAN --> TOOLS[Select authorized tools with reasons]
+        TOOLS --> SEARCH_REVIEW{Human search and tool review}
     end
 
     SEARCH_REVIEW -->|Stop| PAUSED[(Durable checkpoint)]
@@ -77,7 +80,8 @@ flowchart TB
         LOCAL --> MERGE[Merge and DOI-aware deduplication]
         MCP_SEARCH --> MERGE
         MATERIALS --> MERGE
-        MERGE --> INDEX[Chunk, embed, and update Chroma index]
+        MERGE --> INTEGRITY[MCP integrity checks]
+        INTEGRITY --> INDEX[Exclude retractions, embed, and update Chroma]
     end
 
     subgraph RETRIEVAL[3. Retrieve and assess]
@@ -87,6 +91,9 @@ flowchart TB
         SELECT --> EVALUATE[Measure coverage and evidence quality]
         EVALUATE --> CRITIC{Bounded research critic}
     end
+
+    EVALUATE -->|Weak evidence, once| CITATIONS[MCP citation graph expansion]
+    CITATIONS --> INTEGRITY
 
     CRITIC -->|Missing evidence| REFINE[Generate follow-up queries]
     REFINE --> SEARCH_REVIEW
@@ -108,7 +115,8 @@ flowchart TB
     VALIDATE --> SAVE[(Save messages, result, and checkpoint)]
     SAVE --> UI[Report, evidence map, papers, and live trace]
 
-    TRACE[Structured logs, nested spans, and run metrics] -. observes .-> INTENT
+    TRACE[Structured logs, nested spans, and run metrics] -. observes .-> PLAN
+    TRACE -. observes .-> TOOLS
     TRACE -. observes .-> DISPATCH
     TRACE -. observes .-> HYBRID
     TRACE -. observes .-> ANSWER
@@ -399,6 +407,39 @@ With human review enabled, `review_search_plan` is inserted before every `search
 
 `critique_research` is a bounded decision node rather than an unconstrained second agent. It records missing topics, weak evidence, recommended queries, confidence, and remaining retry budget in `critique_history`. The default critic is deterministic and local; `ResearchCritic` is the provider interface for adding an LLM-backed critic later without changing graph routing.
 
+### Dynamic tool selection
+
+After intent analysis, `select_tools` creates a checkpoint-safe `ToolPlan`. Every
+choice records whether the tool was selected, why, its workflow stage, and its
+required capability. Selection is deterministic and policy-bounded rather than an
+unrestricted model tool call:
+
+- local RAG is selected whenever the authorization tier permits it;
+- OpenAlex search and integrity checks are selected for authorized literature runs;
+- citation expansion is armed as a one-pass fallback for weak retrieval;
+- full text is selected for explicit methods, datasets, quantitative, comparison,
+  limitation, implementation, or reproducibility detail;
+- material screening is selected only for property-constrained candidate questions.
+
+The LangGraph routes obey this plan, while authorization, retry limits, HITL review,
+and cancellation remain final enforcement boundaries. Old checkpoints without a
+tool plan retain their previous behavior. The review dialog and execution trace show
+the selected tools before and after execution.
+
+Typical decisions:
+
+| Question shape | Selected additions |
+| --- | --- |
+| General literature overview | Local RAG, OpenAlex, integrity checking; citation expansion remains available if evidence is weak |
+| Detailed methods, datasets, comparisons, or numerical results | Overview tools plus selective full-text acquisition |
+| Property-constrained candidate shortlist | Materials screening plus its measured result as a RAG document |
+| Local Reader request | Local RAG only; unavailable network and database tools remain recorded as rejected choices |
+
+Selection does not let the model invent tool names or arguments. The registry in
+`app/tool_selection.py` is an allowlist, and the policy derives bounded arguments
+such as an explicit band-gap range from the question. Material results retain their
+dataset and measurement provenance when converted into retrieval context.
+
 ## Intent-First Planning And RAG
 
 Planning is a two-stage structured operation. Before generating keywords, the planner records:
@@ -571,7 +612,10 @@ min_concept_coverage = 0.60
 
 These are configurable through `build_research_graph()`.
 
-The application accesses external literature only through the stdio MCP server. It has no direct OpenAlex or full-text provider fallback. Tool failures are retained in graph state so boundary failures remain visible rather than silently switching execution paths.
+The application accesses external literature and research providers only through the
+stdio MCP server. It has no direct OpenAlex, Crossref, Semantic Scholar, or full-text
+provider fallback. Tool failures are retained in graph state so boundary failures
+remain visible rather than silently switching execution paths.
 
 ## MCP Tools
 
@@ -581,7 +625,7 @@ Start the server directly with:
 python -m mcp_server.server
 ```
 
-The server exposes three tools. Interpretation remains inside the LangGraph workflow.
+The server exposes five tools. Interpretation remains inside the LangGraph workflow.
 
 ### `search_papers`
 
@@ -590,6 +634,28 @@ search_papers(query: str, limit: int = 10)
 ```
 
 Returns serialized `Paper` records from OpenAlex.
+
+### `check_research_integrity`
+
+```text
+check_research_integrity(doi: str)
+```
+
+Uses Crossref publication-update metadata, including Retraction Watch records, to
+classify a DOI as clear, corrected, expression of concern, retracted, or unknown.
+Confirmed retractions remain visible for audit but are excluded from the RAG index.
+Provider failures produce an unknown status and never stop the research workflow.
+
+### `expand_citation_graph`
+
+```text
+expand_citation_graph(paper: Paper, limit: int = 5)
+```
+
+Uses Semantic Scholar to retrieve a bounded set of references and citing papers.
+The graph calls this tool at most once per run, only when normal retrieval leaves
+insufficient evidence. Discovered papers retain the seed paper ID and relationship
+source before passing through integrity checks, deduplication, and RAG indexing.
 
 ### `get_full_text`
 
@@ -809,6 +875,12 @@ The compiled graph returns a `ResearchState` dictionary. Useful fields include:
 | `search_queries` | Most recent approved query batch |
 | `searched_queries` | All executed queries |
 | `papers` | Deduplicated papers accumulated across iterations |
+| `tool_plan` | Selected and rejected tools with reasons and capability requirements |
+| `material_screening_result` | Structured candidate result when the planner invokes the materials tool |
+| `integrity_checked_count` | DOI records checked through Crossref |
+| `retracted_paper_count` | Confirmed retractions excluded from indexing |
+| `citation_expansion_attempted` | Whether the bounded citation branch ran |
+| `citation_expansion_count` | New papers contributed by citation expansion |
 | `retrieved_passages` | Final context-selected evidence in citation-label order |
 | `retrieved_papers` | Papers represented in retrieval before context filtering |
 | `evidence_coverage` | Fraction of extracted question concepts found in evidence |
@@ -841,6 +913,7 @@ Environment variables:
 | `QWEN_BASE_URL` | No | international endpoint | Region-specific OpenAI-compatible Model Studio endpoint |
 | `EMBEDDING_PROVIDER` | No | `local` | Set to `openai` to request OpenAI embeddings |
 | `OPENALEX_MAILTO` | No | unset | Identifies the caller to OpenAlex |
+| `SEMANTIC_SCHOLAR_API_KEY` | No | unset | Optional higher-capacity citation-graph access |
 | `FULLTEXT_CACHE_DIR` | No | `.cache/fulltext` | Full-text extraction cache directory |
 | `CHECKPOINT_DB_PATH` | No | `.cache/checkpoints/research.sqlite` | Durable SQLite state for human-review threads |
 | `MEMORY_DB_PATH` | No | `.cache/memory/workspaces.sqlite` | Projects, chats, messages, and saved research results |
@@ -868,7 +941,7 @@ Run all tests:
 pytest -q
 ```
 
-The current suite has 75 tests covering:
+The current suite has 83 tests covering:
 
 - models and deduplication;
 - OpenAlex parsing;
@@ -889,6 +962,7 @@ The current suite has 75 tests covering:
 - simulated authorization enforcement and local-only embedded-corpus retrieval.
 - durable projects, multiple chats, idempotent messages, and bounded workspace context.
 - hierarchical project/chat authorization and higher-tier access inheritance.
+- intent-aware tool selection, authorization filtering, and material-range parsing.
 
 Tests use fakes and recorded fixtures; they do not require network access.
 
@@ -963,6 +1037,7 @@ app/
   graph.py         LangGraph nodes, routing, goals, subtasks, concurrency, and HITL
   grounding.py     claim-to-evidence verification and bounded answer repair
   llm.py           query generation, synthesis, local fallbacks, and citation validation
+  tool_selection.py authorized dynamic tool registry, policy, and argument extraction
   materials_ml.py  measured-property screening and composition-model adapter
   main.py          synchronous, asynchronous, and interactive CLI entry points
   mcp_client.py    exclusive stdio MCP client

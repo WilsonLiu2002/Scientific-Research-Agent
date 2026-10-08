@@ -318,10 +318,11 @@ function handleReviewSession(payload) {
 
 function renderReview(review) {
   const isSearch = review.review_type === "search_plan";
+  const plannedTools = (review.tool_plan?.choices || []).filter((tool) => tool.selected).map((tool) => tool.tool_id);
   $("#review-stage").textContent = isSearch ? "Checkpoint · before external search" : "Checkpoint · before full-text access";
   $("#review-title").textContent = isSearch ? "Review the search strategy" : "Choose papers for deep reading";
   $("#review-purpose").textContent = isSearch
-    ? review.research_intent?.objective || review.question
+    ? `${review.research_intent?.objective || review.question}${plannedTools.length ? ` Selected tools: ${plannedTools.join(", ")}.` : ""}`
     : `The agent proposes full-text retrieval for ${(review.papers || []).length} paper(s).`;
   $("#review-current").innerHTML = isSearch
     ? (review.queries || []).map((query, index) => `<label class="review-query"><span>${String(index + 1).padStart(2, "0")}</span><input data-review-query value="${escapeHtml(query)}" aria-label="Search query ${index + 1}"></label>`).join("")
@@ -503,8 +504,8 @@ function renderPipeline(activeIndex, completed = false) {
 
 function renderPipelineFromTrace(events) {
   const stageByOperation = [
-    [/langgraph\.node\.plan_research|llm\.research_planning/, 0],
-    [/langgraph\.node\.search_papers|subtask\.literature_search|mcp\.client\.search_papers/, 1],
+    [/langgraph\.node\.(plan_research|select_tools)|llm\.research_planning/, 0],
+    [/langgraph\.node\.(search_papers|check_paper_integrity|expand_citation_graph)|subtask\.literature_search|mcp\.client\.(search_papers|check_research_integrity|expand_citation_graph)/, 1],
     [/langgraph\.node\.(index_papers|retrieve_relevant_papers|evaluate_evidence)|rag\.retrieve_for_intent/, 2],
     [/langgraph\.node\.(review_deep_read|deep_read_papers)|subtask\.deep_read|mcp\.client\.get_full_text/, 3],
     [/langgraph\.node\.(prepare_context|write_answer)|llm\.answer_synthesis/, 4],
@@ -591,9 +592,11 @@ function renderPapers(papers) {
   $("#paper-count").textContent = `${papers.length} sources`;
   $("#paper-list").innerHTML = papers.map((paper, index) => `
     <article class="paper">
-      <div class="paper-top"><span class="paper-index">${String(index + 1).padStart(2, "0")}</span><span class="paper-source">${escapeHtml(paper.source || "source")}</span></div>
+      <div class="paper-top"><span class="paper-index">${String(index + 1).padStart(2, "0")}</span><span class="paper-source">${escapeHtml(paper.source || "source")}</span>${paper.integrity_status && paper.integrity_status !== "unchecked" ? `<span class="paper-integrity integrity-${escapeHtml(paper.integrity_status)}">${escapeHtml(paper.integrity_status.replaceAll("_", " "))}</span>` : ""}</div>
       <h3>${escapeHtml(paper.title)}</h3>
       <p>${escapeHtml(paper.abstract || "No abstract available.")}</p>
+      ${paper.discovered_from ? `<small class="paper-discovery">Citation graph from ${escapeHtml(paper.discovered_from)}</small>` : ""}
+      ${(paper.integrity_updates || []).length ? `<small class="paper-warning">${escapeHtml(paper.integrity_updates.join(" · "))}</small>` : ""}
       <footer><span>${paper.year || "n.d."}</span><span>${escapeHtml(paper.venue || "Unspecified venue")}</span>${paper.url ? `<a href="${safeUrl(paper.url)}" target="_blank" rel="noreferrer">Open source</a>` : ""}</footer>
     </article>`).join("");
 }
@@ -601,8 +604,10 @@ function renderPapers(papers) {
 function renderTrace(result) {
   const tasks = result.subtasks || [];
   const critiques = result.critique_history || [];
+  const selectedTools = (result.tool_plan?.choices || []).filter((tool) => tool.selected).map((tool) => tool.tool_id);
   const items = [
     { time: "PLAN", title: `Purpose: ${result.research_intent?.purpose || "research"}`, detail: result.research_intent?.objective || `${(result.search_queries || []).length} search queries generated`, status: result.goal?.status || "complete" },
+    { time: "TOOLS", title: `${selectedTools.length} tools selected`, detail: selectedTools.join(" · ") || "No authorized tools selected", status: "completed" },
     ...tasks.map((task) => ({ time: `ITER ${task.iteration}`, title: task.objective, detail: `${task.result_count || 0} results${task.error ? ` · ${task.error}` : ""}`, status: task.status })),
     ...critiques.map((critique) => ({ time: `CRITIC ${critique.iteration}`, title: `Evidence verdict: ${critique.verdict}`, detail: critique.reason, status: `${Math.round(critique.confidence * 100)}% confidence` })),
     { time: "CONTEXT", title: "Evidence packet assembled", detail: `${result.context_stats?.estimated_tokens || 0} estimated tokens from ${result.context_stats?.distinct_papers || 0} papers`, status: "completed" },

@@ -28,11 +28,17 @@ class ResearchState(TypedDict, total=False):
     run_metrics: dict[str, Any]
     run_trace: dict[str, Any]
     skill: str
+    tool_plan: dict[str, Any]
+    material_screening_result: dict[str, Any]
     search_queries: list[str]
     research_intent: ResearchIntent
     query_rationales: dict[str, str]
     retrieval_probes: list[str]
     papers: list[Paper]
+    citation_expansion_attempted: bool
+    citation_expansion_count: int
+    integrity_checked_count: int
+    retracted_paper_count: int
     indexed_paper_count: int
     local_corpus_paper_count: int
     retrieved_papers: list[Paper]

@@ -25,6 +25,7 @@ from app.observability import (
 from app.rag import create_vector_store, retrieve_for_intent
 from app.skill_loader import load_skill
 from app.state import ResearchState
+from app.tool_selection import material_screen_request, select_tools as build_tool_plan, tool_is_selected
 
 
 class ResearchRunCancelled(RuntimeError):
@@ -42,11 +43,19 @@ class SimpleCompiledGraph:
 
         current: ResearchState = dict(state)
         current.update(self.builder.plan_research(current))
+        current.update(self.builder.select_tools(current))
         while True:
             current.update(self.builder.search_papers(current))
+            current.update(self.builder.check_paper_integrity(current))
             current.update(self.builder.index_papers(current))
             current.update(self.builder.retrieve_relevant_papers(current))
             current.update(self.builder.evaluate_evidence(current))
+            if self.builder.route_after_evaluation(current) == "expand_citation_graph":
+                current.update(self.builder.expand_citation_graph(current))
+                current.update(self.builder.check_paper_integrity(current))
+                current.update(self.builder.index_papers(current))
+                current.update(self.builder.retrieve_relevant_papers(current))
+                current.update(self.builder.evaluate_evidence(current))
             current.update(self.builder.critique_research(current))
             route = self.builder.route_after_critique(current)
             if route == "write_answer":
@@ -143,6 +152,10 @@ class ResearchGraphBuilder:
             "human_review_history": [],
             "reviewer_instructions": [],
             "critique_history": [],
+            "citation_expansion_attempted": False,
+            "citation_expansion_count": 0,
+            "integrity_checked_count": 0,
+            "retracted_paper_count": 0,
             "cancelled": False,
             "goal": ResearchGoal(
                 objective=f"Answer the research question: {state['question']}",
@@ -151,6 +164,36 @@ class ResearchGraphBuilder:
             ),
             "subtasks": make_search_subtasks(queries, iteration=1),
         }
+
+    def select_tools(self, state: ResearchState) -> dict[str, Any]:
+        """LangGraph node: choose an authorized, intent-specific tool portfolio."""
+
+        profile = state.get("access_profile")
+        capabilities = (
+            set(profile.get("capabilities", []))
+            if isinstance(profile, dict)
+            else {"rag:read", "literature:search", "materials:read", "fulltext:read"}
+        )
+        plan = build_tool_plan(
+            question=state["question"],
+            intent=state.get("research_intent"),
+            capabilities=capabilities,
+            enable_full_text=self.enable_full_text,
+        )
+        selected = sorted(plan.selected_ids())
+        log_event("tools.selected", selected_tools=selected, selection_count=len(selected))
+        metrics_set("selected_tools", selected)
+        return {
+            "tool_plan": plan.model_dump(),
+            "deep_read_requested": tool_is_selected(plan, "get_full_text"),
+        }
+
+    @staticmethod
+    def tool_enabled(state: ResearchState, tool_id: str) -> bool:
+        """Honor new tool plans while keeping old checkpoints backward compatible."""
+
+        plan = state.get("tool_plan")
+        return tool_is_selected(plan, tool_id) if plan is not None else True
 
     def review_search_plan(self, state: ResearchState) -> dict[str, Any]:
         """LangGraph HITL node: pause before external searches for approval or query edits."""
@@ -169,6 +212,7 @@ class ResearchGraphBuilder:
                 "query_rationales": state.get("query_rationales", {}),
                 "goal": state.get("goal").model_dump() if state.get("goal") else None,
                 "subtasks": [task.model_dump() for task in state.get("subtasks", []) if task.status == "pending"],
+                "tool_plan": state.get("tool_plan"),
                 "reviewer_instructions": state.get("reviewer_instructions", []),
                 "allowed_actions": ["approve", "edit", "add_instruction", "stop"],
             }
@@ -246,7 +290,28 @@ class ResearchGraphBuilder:
             for index, query in enumerate(pending_queries, start=1)
         ]
 
-        if not access_allows(state, "literature:search"):
+        material_result = state.get("material_screening_result")
+        if (
+            self.tool_enabled(state, "screen_material_candidates")
+            and material_result is None
+            and hasattr(self.search_client, "screen_material_candidates")
+        ):
+            try:
+                request = material_screen_request(state["question"])
+                result = self.search_client.screen_material_candidates(request)
+                material_result = result.model_dump()
+                papers.append(
+                    Paper(
+                        id=f"materials:{result.dataset_name}",
+                        title=f"Measured candidate screen: {result.property_name}",
+                        abstract=result.rag_context,
+                        source="materials-database",
+                    )
+                )
+            except Exception as exc:
+                errors.append(f"Material candidate screening failed: {exc}")
+
+        if not self.tool_enabled(state, "search_papers") or not access_allows(state, "literature:search"):
             skipped = {
                 task.id: task.model_copy(
                     update={"status": "skipped", "error": "Authorization tier permits local RAG only"}
@@ -264,6 +329,7 @@ class ResearchGraphBuilder:
                 "searched_queries": [*searched_queries, *pending_queries],
                 "subtasks": [skipped.get(task.id, task) for task in state.get("subtasks", [])],
                 "errors": errors,
+                "material_screening_result": material_result,
             }
 
         def execute(task: ResearchSubtask) -> tuple[ResearchSubtask, list[Paper]]:
@@ -312,19 +378,26 @@ class ResearchGraphBuilder:
             "errors": errors,
             "searched_queries": searched_queries,
             "subtasks": subtasks,
+            "material_screening_result": material_result,
         }
 
     def index_papers(self, state: ResearchState) -> dict[str, Any]:
         """LangGraph node: index durable local records together with newly discovered papers."""
 
         self.check_cancelled()
-        local_papers = self.local_corpus.papers() if access_allows(state, "rag:read") else []
+        local_papers = (
+            self.local_corpus.papers()
+            if self.tool_enabled(state, "local_rag") and access_allows(state, "rag:read")
+            else []
+        )
         papers = deduplicate_papers([*local_papers, *state.get("papers", [])])
-        indexed_count = self.vector_store.index_papers(papers)
+        eligible_papers = [paper for paper in papers if paper.integrity_status != "retracted"]
+        indexed_count = self.vector_store.index_papers(eligible_papers)
         log_event(
             "rag.corpus_indexed",
             local_document_count=len(local_papers),
             discovered_document_count=len(state.get("papers", [])),
+            retracted_document_count=len(papers) - len(eligible_papers),
             indexed_document_count=indexed_count,
         )
         return {
@@ -332,6 +405,100 @@ class ResearchGraphBuilder:
             "indexed_paper_count": indexed_count,
             "local_corpus_paper_count": len(local_papers),
         }
+
+    def check_paper_integrity(self, state: ResearchState) -> dict[str, Any]:
+        """LangGraph node: annotate DOI papers and prevent retracted work entering RAG."""
+
+        self.check_cancelled()
+        local_papers = (
+            self.local_corpus.papers()
+            if self.tool_enabled(state, "local_rag") and access_allows(state, "rag:read")
+            else []
+        )
+        papers = deduplicate_papers([*local_papers, *state.get("papers", [])])
+        errors = list(state.get("errors", []))
+        checker = getattr(self.search_client, "check_research_integrity", None)
+        candidates = [paper for paper in papers if paper.doi and paper.integrity_status == "unchecked"]
+        if not self.tool_enabled(state, "check_research_integrity") or not checker or not access_allows(state, "literature:search"):
+            return {"papers": papers}
+
+        def execute(paper: Paper) -> Paper:
+            try:
+                result = checker(paper.doi or "")
+                return paper.model_copy(
+                    update={
+                        "integrity_status": result.status,
+                        "integrity_updates": result.updates,
+                    }
+                )
+            except Exception as exc:
+                errors.append(f"Integrity check failed for `{paper.doi}`: {exc}")
+                return paper.model_copy(update={"integrity_status": "unknown"})
+
+        workers = min(self.max_concurrent_tasks, len(candidates)) or 1
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="integrity-check") as executor:
+            checked = list(executor.map(lambda paper: contextvars.copy_context().run(execute, paper), candidates))
+        by_key = {paper.dedupe_key(): paper for paper in checked}
+        annotated = [by_key.get(paper.dedupe_key(), paper) for paper in papers]
+        retracted = sum(paper.integrity_status == "retracted" for paper in annotated)
+        metrics_set("integrity_checked_papers", len(checked))
+        metrics_set("retracted_papers", retracted)
+        return {
+            "papers": annotated,
+            "integrity_checked_count": state.get("integrity_checked_count", 0) + len(checked),
+            "retracted_paper_count": retracted,
+            "errors": errors,
+        }
+
+    def expand_citation_graph(self, state: ResearchState) -> dict[str, Any]:
+        """LangGraph node: perform one bounded citation expansion around strong seed papers."""
+
+        self.check_cancelled()
+        expander = getattr(self.search_client, "expand_citation_graph", None)
+        papers = list(state.get("papers", []))
+        errors = list(state.get("errors", []))
+        if not self.tool_enabled(state, "expand_citation_graph") or not expander or not access_allows(state, "literature:search"):
+            return {"citation_expansion_attempted": True, "citation_expansion_count": 0}
+        seeds = [paper for paper in state.get("retrieved_papers", []) if paper.integrity_status != "retracted"][:3]
+
+        def execute(paper: Paper) -> list[Paper]:
+            try:
+                return expander(paper, limit=4).papers
+            except Exception as exc:
+                errors.append(f"Citation expansion failed for `{paper.id}`: {exc}")
+                return []
+
+        workers = min(self.max_concurrent_tasks, len(seeds)) or 1
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="citation-expand") as executor:
+            expanded = [
+                item
+                for result in executor.map(
+                    lambda paper: contextvars.copy_context().run(execute, paper), seeds
+                )
+                for item in result
+            ]
+        merged = deduplicate_papers([*papers, *expanded])
+        added = max(len(merged) - len(deduplicate_papers(papers)), 0)
+        metrics_set("citation_expansion_papers", added)
+        return {
+            "papers": merged,
+            "citation_expansion_attempted": True,
+            "citation_expansion_count": added,
+            "errors": errors,
+        }
+
+    def route_after_evaluation(self, state: ResearchState) -> str:
+        """Expand one citation neighborhood when normal discovery leaves weak evidence."""
+
+        can_expand = (
+            not state.get("evidence_sufficient", False)
+            and not state.get("citation_expansion_attempted", False)
+            and bool(state.get("retrieved_papers"))
+            and access_allows(state, "literature:search")
+            and hasattr(self.search_client, "expand_citation_graph")
+            and self.tool_enabled(state, "expand_citation_graph")
+        )
+        return "expand_citation_graph" if can_expand else "critique_research"
 
     def retrieve_relevant_papers(self, state: ResearchState) -> dict[str, Any]:
         """LangGraph node: retrieve the most relevant evidence passages."""
@@ -443,14 +610,9 @@ class ResearchGraphBuilder:
         verdict = critique.verdict if critique else "stop"
         if verdict == "retry" and critique and critique.recommended_queries:
             return "generate_followup_queries"
-        if verdict == "deep_read" and not state.get("fulltext_attempted"):
+        if verdict == "deep_read" and not state.get("fulltext_attempted") and self.tool_enabled(state, "get_full_text"):
             return "review_deep_read" if self.enable_human_review else "deep_read_papers"
         return "write_answer"
-
-    def route_after_evaluation(self, state: ResearchState) -> str:
-        """Backward-compatible routing helper for callers with precomputed critiques."""
-
-        return self.route_after_critique(state)
 
     def review_deep_read(self, state: ResearchState) -> dict[str, Any]:
         """LangGraph HITL node: approve, narrow, skip, or cancel full-text acquisition."""
@@ -729,8 +891,11 @@ class ResearchGraphBuilder:
 
         graph = StateGraph(ResearchState)
         graph.add_node("plan_research", observe_node("plan_research", self.plan_research))
+        graph.add_node("select_tools", observe_node("select_tools", self.select_tools))
         graph.add_node("review_search_plan", observe_node("review_search_plan", self.review_search_plan))
         graph.add_node("search_papers", observe_node("search_papers", self.search_papers))
+        graph.add_node("check_paper_integrity", observe_node("check_paper_integrity", self.check_paper_integrity))
+        graph.add_node("expand_citation_graph", observe_node("expand_citation_graph", self.expand_citation_graph))
         graph.add_node("index_papers", observe_node("index_papers", self.index_papers))
         graph.add_node("retrieve_relevant_papers", observe_node("retrieve_relevant_papers", self.retrieve_relevant_papers))
         graph.add_node("evaluate_evidence", observe_node("evaluate_evidence", self.evaluate_evidence))
@@ -745,19 +910,29 @@ class ResearchGraphBuilder:
         graph.add_node("validate_answer", observe_node("validate_answer", self.validate_answer))
 
         graph.add_edge(START, "plan_research")
+        graph.add_edge("plan_research", "select_tools")
         if self.enable_human_review:
-            graph.add_edge("plan_research", "review_search_plan")
+            graph.add_edge("select_tools", "review_search_plan")
             graph.add_conditional_edges(
                 "review_search_plan",
                 observe_route("after_search_review", self.route_after_search_review),
                 {"search_papers": "search_papers", "cancel_workflow": "cancel_workflow"},
             )
         else:
-            graph.add_edge("plan_research", "search_papers")
-        graph.add_edge("search_papers", "index_papers")
+            graph.add_edge("select_tools", "search_papers")
+        graph.add_edge("search_papers", "check_paper_integrity")
+        graph.add_edge("check_paper_integrity", "index_papers")
         graph.add_edge("index_papers", "retrieve_relevant_papers")
         graph.add_edge("retrieve_relevant_papers", "evaluate_evidence")
-        graph.add_edge("evaluate_evidence", "critique_research")
+        graph.add_conditional_edges(
+            "evaluate_evidence",
+            observe_route("after_evaluation", self.route_after_evaluation),
+            {
+                "expand_citation_graph": "expand_citation_graph",
+                "critique_research": "critique_research",
+            },
+        )
+        graph.add_edge("expand_citation_graph", "check_paper_integrity")
         graph.add_conditional_edges(
             "critique_research",
             observe_route("after_critique", self.route_after_critique),

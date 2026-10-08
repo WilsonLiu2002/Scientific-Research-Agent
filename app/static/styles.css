@@ -186,6 +186,11 @@ h1 { margin: 0; font-family: var(--serif); font-size: clamp(30px, 4vw, 52px); fo
 .paper-top { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 20px; }
 .paper-index { font-family: var(--mono); color: var(--coral); font-size: 11px; }
 .paper-source { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+.paper-integrity { border: 1px solid var(--line); padding: 2px 6px; text-transform: uppercase; font: 10px var(--mono); }
+.integrity-clear { color: var(--green); }
+.integrity-corrected, .integrity-expression_of_concern, .integrity-unknown { color: #9b5b18; }
+.integrity-retracted, .paper-warning { color: var(--coral); }
+.paper-discovery, .paper-warning { display: block; margin-top: 8px; font-family: var(--mono); }
 .paper h3 { margin: 0 0 10px; font-family: var(--serif); font-size: 20px; font-weight: 500; line-height: 1.25; }
 .paper p { color: var(--muted); font-family: var(--serif); font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .paper footer { display: flex; gap: 13px; color: var(--muted); font-family: var(--mono); font-size: 10px; }

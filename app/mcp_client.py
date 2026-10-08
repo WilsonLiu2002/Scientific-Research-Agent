@@ -6,7 +6,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
-from app.models import FullTextDocument, Paper
+from app.models import CitationExpansionResult, FullTextDocument, Paper, PaperIntegrityResult
 from app.materials_ml import CandidateScreenRequest, CandidateScreenResult
 from app.observability import correlation_fields, log_event, metrics_increment, span
 
@@ -48,6 +48,32 @@ class AcademicMCPClient:
         result = await self._call_tool("get_full_text", arguments)
         payload = self._parse_tool_payload(result, default=None)
         return FullTextDocument.model_validate(payload) if payload else None
+
+    def check_research_integrity(self, doi: str) -> PaperIntegrityResult:
+        """Check one DOI for retractions, corrections, and expressions of concern."""
+
+        return asyncio.run(self.check_research_integrity_async(doi))
+
+    async def check_research_integrity_async(self, doi: str) -> PaperIntegrityResult:
+        """Call the Crossref-backed research-integrity MCP tool."""
+
+        result = await self._call_tool("check_research_integrity", {"doi": doi})
+        return PaperIntegrityResult.model_validate(self._parse_tool_payload(result, default={}))
+
+    def expand_citation_graph(self, paper: Paper, limit: int = 5) -> CitationExpansionResult:
+        """Discover bounded references and citations around one seed paper."""
+
+        return asyncio.run(self.expand_citation_graph_async(paper, limit))
+
+    async def expand_citation_graph_async(
+        self, paper: Paper, limit: int = 5
+    ) -> CitationExpansionResult:
+        """Call the Semantic Scholar-backed citation expansion MCP tool."""
+
+        result = await self._call_tool(
+            "expand_citation_graph", {"paper": paper.model_dump(), "limit": limit}
+        )
+        return CitationExpansionResult.model_validate(self._parse_tool_payload(result, default={}))
 
     def screen_material_candidates(
         self, request: CandidateScreenRequest
